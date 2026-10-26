@@ -1,0 +1,14 @@
+broker_provider: trading212
+market_data_provider: yfinance
+shortlist_size: 20
+universe_sources:
+  - sp500
+  - nasdaq100
+  - ftse100
+instrument_cache_path: .cache/t212_instruments.json
+instrument_cache_max_age_seconds: 3600
+halal_thresholds:
+  debt_to_market_cap: 0.33
+  cash_and_interest_to_market_cap: 0.33
+  receivables_and_cash_to_market_cap: 0.33
+  non_permissible_income_ratio: 0.05

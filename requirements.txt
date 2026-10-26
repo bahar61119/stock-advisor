@@ -1,0 +1,7 @@
+requests
+pyyaml
+yfinance
+pandas
+numpy
+pytest
+requests-mock
