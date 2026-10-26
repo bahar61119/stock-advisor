@@ -14,8 +14,43 @@ def test_load_config_defaults(tmp_path):
 
 def test_load_config_rejects_unknown_broker(tmp_path):
     bad = tmp_path / "bad.yaml"
-    bad.write_text("broker_provider: not_a_real_broker\nmarket_data_provider: yfinance\n")
-    with pytest.raises(ValueError):
+    bad.write_text("""broker_provider: not_a_real_broker
+market_data_provider: yfinance
+shortlist_size: 20
+universe_sources:
+  - sp500
+  - nasdaq100
+  - ftse100
+instrument_cache_path: .cache/t212_instruments.json
+instrument_cache_max_age_seconds: 3600
+halal_thresholds:
+  debt_to_market_cap: 0.33
+  cash_and_interest_to_market_cap: 0.33
+  receivables_and_cash_to_market_cap: 0.33
+  non_permissible_income_ratio: 0.05
+""")
+    with pytest.raises(ValueError, match="Unknown broker_provider"):
+        load_config(str(bad))
+
+
+def test_load_config_rejects_unknown_market_data_provider(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("""broker_provider: trading212
+market_data_provider: not_a_real_provider
+shortlist_size: 20
+universe_sources:
+  - sp500
+  - nasdaq100
+  - ftse100
+instrument_cache_path: .cache/t212_instruments.json
+instrument_cache_max_age_seconds: 3600
+halal_thresholds:
+  debt_to_market_cap: 0.33
+  cash_and_interest_to_market_cap: 0.33
+  receivables_and_cash_to_market_cap: 0.33
+  non_permissible_income_ratio: 0.05
+""")
+    with pytest.raises(ValueError, match="Unknown market_data_provider"):
         load_config(str(bad))
 
 
