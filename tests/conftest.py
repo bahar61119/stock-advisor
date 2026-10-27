@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 from stock_advisor.providers.broker.base import (
     AccountSummary,
@@ -5,6 +7,12 @@ from stock_advisor.providers.broker.base import (
     Position,
 )
 from stock_advisor.providers.broker.fake import FakeBrokerProvider
+from stock_advisor.providers.market_data.base import (
+    CompanyProfile,
+    Fundamentals,
+    PriceSeries,
+)
+from stock_advisor.providers.market_data.fake import FakeMarketDataProvider
 
 
 @pytest.fixture
@@ -55,6 +63,46 @@ def make_fake_broker_provider():
             accounts=summary,
             positions=positions,
             instruments=instruments,
+        )
+
+    return _factory
+
+
+@pytest.fixture
+def make_fake_market_data_provider():
+    """Factory fixture that creates a FakeMarketDataProvider with canned test data."""
+    def _factory():
+        prices = {
+            "AAPL": PriceSeries(
+                dates=[date(2024, 1, 2), date(2024, 1, 3)],
+                close=[185.5, 186.25],
+                volume=[50_000_000.0, 48_000_000.0],
+            )
+        }
+
+        fundamentals = {
+            "AAPL": Fundamentals(
+                total_debt=100_000_000_000.0,
+                total_cash=60_000_000_000.0,
+                market_cap=2_800_000_000_000.0,
+                total_revenue=380_000_000_000.0,
+                non_permissible_income=None,
+                receivables=None,
+            )
+        }
+
+        profiles = {
+            "AAPL": CompanyProfile(
+                sector="Technology",
+                industry="Consumer Electronics",
+                business_summary="Designs, manufactures, and markets smartphones.",
+            )
+        }
+
+        return FakeMarketDataProvider(
+            prices=prices,
+            fundamentals=fundamentals,
+            profiles=profiles,
         )
 
     return _factory
