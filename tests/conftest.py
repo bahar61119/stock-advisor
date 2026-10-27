@@ -52,7 +52,7 @@ def make_fake_broker_provider():
         ]
 
         return FakeBrokerProvider(
-            account_summary=summary,
+            accounts=summary,
             positions=positions,
             instruments=instruments,
         )

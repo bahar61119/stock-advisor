@@ -12,18 +12,18 @@ class FakeBrokerProvider(BrokerProvider):
 
     def __init__(
         self,
-        account_summary: AccountSummary,
+        accounts: AccountSummary,
         positions: list[Position],
         instruments: list[Instrument],
     ):
         """Initialize with canned data."""
-        self._account_summary = account_summary
+        self._accounts = accounts
         self._positions = positions
         self._instruments = instruments
 
     def get_account_summary(self) -> AccountSummary:
         """Return the canned account summary."""
-        return self._account_summary
+        return self._accounts
 
     def get_positions(self) -> list[Position]:
         """Return the canned positions list."""
