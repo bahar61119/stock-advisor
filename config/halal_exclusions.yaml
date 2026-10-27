@@ -1,0 +1,41 @@
+# Sector/industry/business-summary exclusion keywords for the halal screen.
+#
+# This is a flat list of keywords. `screen()` matches each one as a
+# case-insensitive substring against CompanyProfile.sector, .industry, and
+# .business_summary; a single match makes the company non_compliant
+# immediately, before any financial ratio is computed.
+#
+# This list is a reasonable starting point reflecting common AAOIFI-style
+# sector screens (conventional banking/insurance/lending, alcohol, tobacco,
+# gambling, adult entertainment, pork products, conventional weapons). It is
+# editable and NOT exhaustive — add, remove, or narrow entries to match your
+# own Shariah board's guidance. Keep entries lowercase; matching is
+# case-insensitive regardless, but lowercase keeps the file self-documenting.
+
+- bank
+- banking
+- insurance
+- interest-based lending
+- lending
+- alcohol
+- brewery
+- brewer
+- distillery
+- distiller
+- winery
+- tobacco
+- cigarette
+- gambling
+- casino
+- betting
+- lottery
+- adult entertainment
+- pornography
+- pork
+- swine
+- bacon
+- weapons
+- arms manufacturing
+- defense contractor
+- firearms
+- ammunition
