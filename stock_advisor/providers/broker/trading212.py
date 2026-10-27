@@ -23,6 +23,7 @@ from stock_advisor.providers.broker.base import (
 
 DEFAULT_INSTRUMENT_CACHE_PATH = ".cache/t212_instruments.json"
 DEFAULT_CACHE_MAX_AGE_SECONDS = 3600
+REQUEST_TIMEOUT_SECONDS = 10
 
 
 class Trading212BrokerProvider(BrokerProvider):
@@ -73,8 +74,16 @@ class Trading212BrokerProvider(BrokerProvider):
         return {"Authorization": self._auth_header()}
 
     def _get(self, path: str):
-        """Issue a GET request against the Trading212 API and return parsed JSON."""
-        response = requests.get(f"{self._base_url}{path}", headers=self._headers())
+        """Issue a GET request against the Trading212 API and return parsed JSON.
+
+        A timeout is applied so a slow or hanging Trading212 endpoint cannot
+        block this call (and whatever pipeline is waiting on it) forever.
+        """
+        response = requests.get(
+            f"{self._base_url}{path}",
+            headers=self._headers(),
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()
         return response.json()
 

@@ -144,6 +144,20 @@ def test_get_instruments_refetches_when_cache_missing(tmp_path, requests_mock, m
     assert requests_mock.call_count == 1
 
 
+def test_get_requests_pass_a_timeout(requests_mock, monkeypatch):
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/account/summary",
+        json={"currency": "GBP", "totalValue": 1.0,
+              "cash": {"availableToTrade": 0.0, "reservedForOrders": 0.0, "inPies": 0.0},
+              "investments": {"currentValue": 0.0, "totalCost": 0.0,
+                               "realizedProfitLoss": 0.0, "unrealizedProfitLoss": 0.0}},
+    )
+    Trading212BrokerProvider(env="demo").get_account_summary()
+    assert requests_mock.last_request.timeout is not None
+
+
 def test_base_url_uses_env_parameter(requests_mock, monkeypatch):
     monkeypatch.setenv("T212_API_KEY", "k")
     monkeypatch.setenv("T212_API_SECRET", "s")
