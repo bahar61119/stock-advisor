@@ -11,12 +11,22 @@
 # editable and NOT exhaustive — add, remove, or narrow entries to match your
 # own Shariah board's guidance. Keep entries lowercase; matching is
 # case-insensitive regardless, but lowercase keeps the file self-documenting.
+#
+# Keywords are matched as case-insensitive SUBSTRINGS, so bare single words
+# are deliberately avoided where they would collide with unrelated words
+# (e.g. a bare "bank" matches "bankruptcy", a bare "lending" matches
+# "blending"). Prefer qualified, multi-word phrases — they still catch real
+# exclusion-worthy text (a company's sector/industry string like "Banks—
+# Diversified" or a business summary mentioning "conventional banking") but
+# don't fire on a company that merely emerged from bankruptcy or blends tea.
 
-- bank
-- banking
+- conventional bank
+- commercial bank
+- investment bank
+- conventional banking
+- banks
 - insurance
 - interest-based lending
-- lending
 - alcohol
 - brewery
 - brewer
@@ -34,8 +44,8 @@
 - pork
 - swine
 - bacon
-- weapons
 - arms manufacturing
+- conventional weapons manufacturing
 - defense contractor
 - firearms
 - ammunition

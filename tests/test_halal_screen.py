@@ -200,3 +200,25 @@ def test_load_exclusions_returns_nonempty_list_of_strings():
     exclusions = load_exclusions()
     assert len(exclusions) > 0
     assert all(isinstance(keyword, str) for keyword in exclusions)
+
+
+def test_business_summary_bankruptcy_does_not_trigger_bank_exclusion():
+    """'bankruptcy' must not collide with bank-related exclusion keywords."""
+    profile = CompanyProfile(
+        sector="Technology",
+        industry="Software—Application",
+        business_summary="The company emerged from bankruptcy in 2015 and has operated profitably since.",
+    )
+    verdict = screen(profile, full_fundamentals(all_low=True), DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "compliant"
+
+
+def test_business_summary_blending_does_not_trigger_lending_exclusion():
+    """'blending' must not collide with the 'interest-based lending' exclusion keyword."""
+    profile = CompanyProfile(
+        sector="Consumer Defensive",
+        industry="Packaged Foods",
+        business_summary="A tea blending company that sources direct trade leaves.",
+    )
+    verdict = screen(profile, full_fundamentals(all_low=True), DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "compliant"
