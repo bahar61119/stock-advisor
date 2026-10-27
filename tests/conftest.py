@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from stock_advisor.providers.broker.base import (
@@ -13,6 +13,19 @@ from stock_advisor.providers.market_data.base import (
     PriceSeries,
 )
 from stock_advisor.providers.market_data.fake import FakeMarketDataProvider
+
+
+def make_price_series(closes, volumes=None):
+    """Helper to create a PriceSeries from just a list of closes.
+
+    Fills in placeholder dates starting from 2024-01-01 and default volumes
+    (1000.0) unless explicitly provided.
+    """
+    n = len(closes)
+    dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(n)]
+    if volumes is None:
+        volumes = [1000.0] * n
+    return PriceSeries(dates=dates, close=closes, volume=volumes)
 
 
 @pytest.fixture
