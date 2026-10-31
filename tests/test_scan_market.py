@@ -5,6 +5,7 @@ shortlist of `CandidateResult`s.
 from datetime import date, timedelta
 
 from scripts.scan_market import run_scan
+from stock_advisor.analysis.halal_screen import load_exclusions
 from stock_advisor.config import AppConfig, HalalThresholds
 from stock_advisor.providers.broker.base import Instrument
 from stock_advisor.providers.market_data.base import (
@@ -13,6 +14,8 @@ from stock_advisor.providers.market_data.base import (
     PriceSeries,
 )
 from stock_advisor.providers.market_data.fake import FakeMarketDataProvider
+
+EXCLUSIONS = load_exclusions()
 
 DEFAULT_THRESHOLDS = HalalThresholds(
     debt_to_market_cap=0.33,
@@ -166,7 +169,7 @@ def test_run_scan_includes_non_compliant_results_in_all_results():
         profiles={"AAPL": clean_profile()},
     )
     output = run_scan(
-        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()]
+        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()], exclusions=EXCLUSIONS
     )
     assert any(r.ticker == "AAPL" and r.halal.status == "non_compliant" for r in output.all_results)
 
@@ -178,14 +181,14 @@ def test_run_scan_shortlist_capped_at_configured_size():
         config,
         market_data,
         universe=["A", "B", "C", "D"],
-        instruments=make_instruments(["A", "B", "C", "D"]),
+        instruments=make_instruments(["A", "B", "C", "D"]), exclusions=EXCLUSIONS
     )
     assert len(output.shortlist) == 2
 
 
 def test_run_scan_excludes_etfs_from_universe():
     output = run_scan(
-        make_test_config(), FakeMarketDataProvider({}, {}, {}), universe=["SPY"], instruments=[etf_instrument("SPY")]
+        make_test_config(), FakeMarketDataProvider({}, {}, {}), universe=["SPY"], instruments=[etf_instrument("SPY")], exclusions=EXCLUSIONS
     )
     assert output.all_results == []
 
@@ -197,7 +200,7 @@ def test_allowed_recommendations_excludes_add_more_when_non_compliant():
         profiles={"AAPL": clean_profile()},
     )
     output = run_scan(
-        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()]
+        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()], exclusions=EXCLUSIONS
     )
     result = output.all_results[0]
     assert "add_more" not in result.allowed_recommendations
@@ -217,7 +220,7 @@ def test_allowed_recommendations_includes_add_more_when_compliant():
         profiles={"AAPL": clean_profile()},
     )
     output = run_scan(
-        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()]
+        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()], exclusions=EXCLUSIONS
     )
     result = output.all_results[0]
     assert result.halal.status == "compliant"
@@ -234,7 +237,7 @@ def test_allowed_recommendations_excludes_add_more_when_insufficient_data():
         profiles={"AAPL": clean_profile()},
     )
     output = run_scan(
-        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()]
+        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()], exclusions=EXCLUSIONS
     )
     result = output.all_results[0]
     assert result.halal.status == "insufficient_data"
@@ -248,7 +251,7 @@ def test_run_scan_skips_tickers_without_market_data_entry():
     """
     market_data = FakeMarketDataProvider(prices={}, fundamentals={}, profiles={})
     output = run_scan(
-        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()]
+        make_test_config(), market_data, universe=["AAPL"], instruments=[aapl_instrument()], exclusions=EXCLUSIONS
     )
     assert output.all_results == []
     assert output.shortlist == []
@@ -272,7 +275,7 @@ def test_run_scan_shortlist_orders_bullish_before_others():
         make_test_config(shortlist_size=2),
         market_data,
         universe=["A", "B"],
-        instruments=make_instruments(["A", "B"]),
+        instruments=make_instruments(["A", "B"]), exclusions=EXCLUSIONS
     )
     assert [r.ticker for r in output.shortlist] == ["B", "A"]
     assert output.shortlist[0].technical.verdict == "bullish"
@@ -287,7 +290,7 @@ def test_run_scan_broker_ticker_is_the_instrument_ticker():
             profiles={"AAPL": clean_profile()},
         ),
         universe=["AAPL"],
-        instruments=[aapl_instrument()],
+        instruments=[aapl_instrument()], exclusions=EXCLUSIONS
     )
     assert output.all_results[0].broker_ticker == "AAPL_US_EQ"
 
@@ -321,3 +324,157 @@ def test_compute_allowed_recommendations_unknown_status_excludes_add_more():
     from stock_advisor.reporting.schema import compute_allowed_recommendations
 
     assert "add_more" not in compute_allowed_recommendations("some_future_status")
+
+
+# --- Coverage-loss visibility and failure isolation (Fixes 2 and 3) ---
+
+
+class RaisingMarketDataProvider(FakeMarketDataProvider):
+    """A market-data provider that raises a *generic* exception for chosen
+    tickers, standing in for what the real YFinanceProvider can throw:
+    rate-limit errors, connection/timeout errors, JSON decode failures.
+
+    Deliberately not a KeyError -- KeyError is FakeMarketDataProvider's
+    dict-miss "no coverage" behaviour, and catching only that (the bug this
+    covers) left every real provider failure to abort the whole run.
+    """
+
+    def __init__(self, failing: set[str], **kwargs):
+        super().__init__(**kwargs)
+        self._failing = failing
+        self.calls: list[str] = []
+
+    def get_price_history(self, ticker: str, period: str = "1y") -> PriceSeries:
+        self.calls.append(ticker)
+        if ticker in self._failing:
+            raise RuntimeError(f"simulated provider backend failure for {ticker}")
+        return super().get_price_history(ticker)
+
+
+def test_run_scan_reports_unmatched_tickers_and_count():
+    output = run_scan(
+        make_test_config(),
+        make_fake_market_data_for(["A"]),
+        universe=["A", "NOPE", "ALSONOPE"],
+        instruments=make_instruments(["A"]),
+        exclusions=EXCLUSIONS,
+    )
+    assert output.unmatched == ["NOPE", "ALSONOPE"]
+    assert output.unmatched_count == 2
+    assert [r.ticker for r in output.all_results] == ["A"]
+
+
+def test_run_scan_unmatched_count_is_zero_when_everything_matches():
+    output = run_scan(
+        make_test_config(),
+        make_fake_market_data_for(["A", "B"]),
+        universe=["A", "B"],
+        instruments=make_instruments(["A", "B"]),
+        exclusions=EXCLUSIONS,
+    )
+    assert output.unmatched_count == 0
+    assert output.unmatched == []
+
+
+def test_run_scan_records_tickers_with_no_market_data_entry():
+    output = run_scan(
+        make_test_config(),
+        FakeMarketDataProvider(prices={}, fundamentals={}, profiles={}),
+        universe=["AAPL"],
+        instruments=[aapl_instrument()],
+        exclusions=EXCLUSIONS,
+    )
+    assert output.all_results == []
+    assert output.no_market_data_tickers == ["AAPL"]
+    assert output.failed_tickers == []
+
+
+def test_run_scan_survives_a_generic_provider_exception():
+    """The Fix-3 regression: one yfinance exception used to propagate out of
+    main(), so a scheduled run produced a traceback and no JSON at all --
+    not even a partial report. The scan must complete instead.
+    """
+    tickers = ["A", "B", "C"]
+    market_data = RaisingMarketDataProvider(
+        failing={"B"},
+        prices={t: bullish_price_series() for t in tickers},
+        fundamentals={t: compliant_fundamentals() for t in tickers},
+        profiles={t: clean_profile() for t in tickers},
+    )
+    output = run_scan(
+        make_test_config(),
+        market_data,
+        universe=tickers,
+        instruments=make_instruments(tickers),
+        exclusions=EXCLUSIONS,
+    )
+    assert [r.ticker for r in output.all_results] == ["A", "C"]
+    assert output.failed_tickers == ["B"]
+    assert output.no_market_data_tickers == []
+
+
+def test_run_scan_continues_past_a_failure_to_later_tickers():
+    """Specifically that the loop *continues*: a scan aborting at the first
+    failure would also show the failed ticker, but lose everything after it.
+    """
+    tickers = ["A", "B", "C", "D"]
+    market_data = RaisingMarketDataProvider(
+        failing={"A", "B"},
+        prices={t: bullish_price_series() for t in tickers},
+        fundamentals={t: compliant_fundamentals() for t in tickers},
+        profiles={t: clean_profile() for t in tickers},
+    )
+    output = run_scan(
+        make_test_config(),
+        market_data,
+        universe=tickers,
+        instruments=make_instruments(tickers),
+        exclusions=EXCLUSIONS,
+    )
+    assert market_data.calls == tickers
+    assert output.failed_tickers == ["A", "B"]
+    assert [r.ticker for r in output.all_results] == ["C", "D"]
+
+
+def test_run_scan_output_is_json_serializable_with_the_new_fields():
+    """main() prints json.dumps(dataclasses.asdict(output)), so the new
+    fields have to survive that round trip.
+    """
+    import dataclasses
+    import json
+
+    output = run_scan(
+        make_test_config(),
+        make_fake_market_data_for(["A"]),
+        universe=["A", "NOPE"],
+        instruments=make_instruments(["A"]),
+        exclusions=EXCLUSIONS,
+    )
+    document = json.loads(json.dumps(dataclasses.asdict(output)))
+    assert document["unmatched_count"] == 1
+    assert document["unmatched"] == ["NOPE"]
+    assert document["failed_tickers"] == []
+    assert document["no_market_data_tickers"] == []
+    assert document["all_results"][0]["halal"]["caveats"]
+
+
+def test_run_scan_does_no_file_io_of_its_own():
+    """run_scan's docstring claims no I/O beyond the injected provider; it
+    used to call load_exclusions() (a file read) anyway. Exclusions are now
+    a parameter, so the claim is true -- a sentinel list proves the function
+    uses what it was given rather than loading its own.
+    """
+    market_data = FakeMarketDataProvider(
+        prices={"AAPL": bullish_price_series()},
+        fundamentals={"AAPL": compliant_fundamentals()},
+        profiles={"AAPL": clean_profile()},
+    )
+    output = run_scan(
+        make_test_config(),
+        market_data,
+        universe=["AAPL"],
+        instruments=[aapl_instrument()],
+        exclusions=["productivity software"],  # matches the clean profile
+    )
+    assert output.all_results[0].halal.status == "non_compliant"
+    assert output.all_results[0].halal.failed_checks == ["sector: productivity software"]

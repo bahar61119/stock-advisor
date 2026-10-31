@@ -10,22 +10,27 @@ Pipeline (`run_portfolio_review`):
    "AAPL_US_EQ") -- a direct ticker-to-ticker match, distinct from Task 7's
    `match_broker_tradable`, which matches a plain universe ticker against
    `instrument.short_name`.
-3. If a matching `Instrument` is found, use its `short_name` as the plain
-   ticker to query the market-data provider for price history, fundamentals,
-   and company profile. Compute a `TechnicalSignal` (Task 5) and a
-   `HalalVerdict` (Task 6), and derive `allowed_recommendations` via Task 8's
+3. If the matched `Instrument.type` is not exactly `"STOCK"`, the holding is
+   a pooled fund (ETF or similar). The spec excludes pooled funds from
+   candidacy outright, "regardless of halal status", so no technical signal
+   or halal screen is computed for it -- it gets `candidate = None` and
+   `reason = REASON_POOLED_FUND`.
+4. Otherwise use the instrument's `short_name` as the plain ticker to query
+   the market-data provider for price history, fundamentals, and company
+   profile. Compute a `TechnicalSignal` (Task 5) and a `HalalVerdict`
+   (Task 6), and derive `allowed_recommendations` via Task 8's
    `compute_allowed_recommendations` (reused, not reimplemented).
-4. If no `Instrument` matches the position's ticker, or the matched
-   `short_name` has no entry in the market-data provider, the holding still
-   appears in the output with `candidate = None` -- never silently dropped,
-   never an exception.
+5. A holding always appears in the output -- never silently dropped, never an
+   exception. When it has no `candidate`, `HoldingResult.reason` says which
+   of the four situations applies (see `HoldingResult`).
 
-`main()` wires the real providers (`YFinanceProvider`, `Trading212BrokerProvider`)
-from `load_config()` and prints `json.dumps(dataclasses.asdict(review_output))`
-to stdout -- no other I/O.
+`main()` builds the providers the config selects (via
+`stock_advisor.providers.factory`), loads the exclusions, and prints
+`json.dumps(dataclasses.asdict(review_output))` to stdout -- no other I/O.
 """
 import dataclasses
 import json
+import os
 
 from stock_advisor.analysis.halal_screen import load_exclusions, screen
 from stock_advisor.analysis.technical import compute_technical_signal
@@ -36,21 +41,43 @@ from stock_advisor.providers.broker.base import (
     Instrument,
     Position,
 )
-from stock_advisor.providers.broker.trading212 import Trading212BrokerProvider
+from stock_advisor.providers.factory import build_broker, build_market_data
 from stock_advisor.providers.market_data.base import MarketDataProvider
-from stock_advisor.providers.market_data.yfinance_provider import YFinanceProvider
-from stock_advisor.reporting.schema import CandidateResult, compute_allowed_recommendations
+from stock_advisor.reporting.schema import (
+    REASON_MARKET_DATA_ERROR,
+    REASON_NO_MARKET_DATA,
+    REASON_POOLED_FUND,
+    REASON_UNMATCHED_INSTRUMENT,
+    CandidateResult,
+    compute_allowed_recommendations,
+)
 
 
 @dataclasses.dataclass
 class HoldingResult:
-    """A single held position plus its screened candidate -- `candidate` is
-    `None` when the position's ticker could not be matched to an `Instrument`
-    or the matched `short_name` has no market-data entry.
+    """A single held position plus its screened candidate.
+
+    `candidate` is `None` whenever the holding could not be screened, and
+    `reason` then says why -- one of the `REASON_*` constants in
+    `stock_advisor.reporting.schema`:
+
+    - `REASON_UNMATCHED_INSTRUMENT`: no broker instrument matched the
+      position's ticker, so there was no plain ticker to query with.
+    - `REASON_NO_MARKET_DATA`: the provider has no entry for that ticker (a
+      coverage gap).
+    - `REASON_MARKET_DATA_ERROR`: the fetch raised (rate limit, connection
+      error, malformed response). Transient, and deliberately distinguishable
+      from a real coverage gap -- "we couldn't look" and "there's nothing to
+      see" warrant different wording in a report.
+    - `REASON_POOLED_FUND`: the holding is an ETF or other pooled fund,
+      excluded from candidacy by the spec rather than by any data problem.
+
+    `reason` is `None` exactly when `candidate` is not `None`.
     """
 
     position: Position
     candidate: CandidateResult | None
+    reason: str | None = None
 
 
 @dataclasses.dataclass
@@ -83,27 +110,38 @@ def _build_candidate(
     market_data: MarketDataProvider,
     config: AppConfig,
     exclusions: list[str],
-) -> CandidateResult | None:
-    """Screen a single matched holding, returning `None` (rather than
-    raising) when the market-data provider has no entry for `short_name`.
+) -> tuple[CandidateResult | None, str | None]:
+    """Screen a single matched holding.
+
+    Returns `(candidate, None)` on success, or `(None, reason)` when the
+    market-data provider has no entry for `short_name` or its fetch raised.
+    Never propagates the provider's exception: one unlucky holding must not
+    cost the user the entire portfolio review, so the three provider calls
+    are isolated with a broad `except Exception` (the point is containing a
+    third-party backend's unpredictable failures, not enumerating them).
     """
     try:
         price_history = market_data.get_price_history(short_name)
         fundamentals = market_data.get_fundamentals(short_name)
         profile = market_data.get_company_profile(short_name)
     except KeyError:
-        return None
+        return None, REASON_NO_MARKET_DATA
+    except Exception:
+        return None, REASON_MARKET_DATA_ERROR
 
     technical = compute_technical_signal(price_history)
     halal = screen(profile, fundamentals, config.halal_thresholds, exclusions)
     allowed_recommendations = compute_allowed_recommendations(halal.status)
 
-    return CandidateResult(
-        ticker=short_name,
-        broker_ticker=broker_ticker,
-        technical=technical,
-        halal=halal,
-        allowed_recommendations=allowed_recommendations,
+    return (
+        CandidateResult(
+            ticker=short_name,
+            broker_ticker=broker_ticker,
+            technical=technical,
+            halal=halal,
+            allowed_recommendations=allowed_recommendations,
+        ),
+        None,
     )
 
 
@@ -111,44 +149,51 @@ def run_portfolio_review(
     config: AppConfig,
     broker: BrokerProvider,
     market_data: MarketDataProvider,
+    exclusions: list[str],
 ) -> PortfolioReviewOutput:
-    """Run the full portfolio-review pipeline (no I/O beyond the injected
-    `broker` and `market_data` providers).
+    """Run the full portfolio-review pipeline against an already-loaded
+    exclusion keyword list -- genuinely no I/O beyond the injected `broker`
+    and `market_data` providers.
     """
     account_summary = broker.get_account_summary()
     positions = broker.get_positions()
     instruments = broker.get_instruments()
-    exclusions = load_exclusions()
 
     holdings: list[HoldingResult] = []
     for position in positions:
         instrument = _find_instrument_by_ticker(position.ticker, instruments)
-        candidate = None
-        if instrument is not None:
-            candidate = _build_candidate(
+        if instrument is None:
+            candidate, reason = None, REASON_UNMATCHED_INSTRUMENT
+        elif instrument.type != "STOCK":
+            # Pooled funds are excluded from candidacy outright, per the
+            # spec -- the same rule `match_broker_tradable` applies to the
+            # scan universe, applied here to what is actually held.
+            candidate, reason = None, REASON_POOLED_FUND
+        else:
+            candidate, reason = _build_candidate(
                 instrument.short_name,
                 instrument.ticker,
                 market_data,
                 config,
                 exclusions,
             )
-        holdings.append(HoldingResult(position=position, candidate=candidate))
+        holdings.append(
+            HoldingResult(position=position, candidate=candidate, reason=reason)
+        )
 
     return PortfolioReviewOutput(account_summary=account_summary, holdings=holdings)
 
 
 def main() -> None:
-    """Wire the real providers from config, run the portfolio review, and
-    print the result as JSON to stdout.
+    """Build the configured providers, run the portfolio review, and print
+    the result as JSON to stdout.
     """
     config = load_config()
-    market_data = YFinanceProvider()
-    broker = Trading212BrokerProvider(
-        instrument_cache_path=config.instrument_cache_path,
-        cache_max_age_seconds=config.instrument_cache_max_age_seconds,
-    )
+    market_data = build_market_data(config)
+    broker = build_broker(config, env=os.environ.get("T212_ENV", "live"))
+    exclusions = load_exclusions()
 
-    review_output = run_portfolio_review(config, broker, market_data)
+    review_output = run_portfolio_review(config, broker, market_data, exclusions)
     print(json.dumps(dataclasses.asdict(review_output)))
 
 

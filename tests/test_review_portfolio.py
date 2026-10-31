@@ -8,6 +8,7 @@ rather than reimplementing the add_more exclusion rule.
 from datetime import date, timedelta
 
 from scripts.review_portfolio import HoldingResult, run_portfolio_review
+from stock_advisor.analysis.halal_screen import load_exclusions
 from stock_advisor.config import AppConfig, HalalThresholds
 from stock_advisor.providers.broker.base import AccountSummary, Instrument, Position
 from stock_advisor.providers.broker.fake import FakeBrokerProvider
@@ -17,6 +18,8 @@ from stock_advisor.providers.market_data.base import (
     PriceSeries,
 )
 from stock_advisor.providers.market_data.fake import FakeMarketDataProvider
+
+EXCLUSIONS = load_exclusions()
 
 DEFAULT_THRESHOLDS = HalalThresholds(
     debt_to_market_cap=0.33,
@@ -137,7 +140,7 @@ def test_held_non_compliant_position_excludes_add_more():
         fundamentals={"AAPL": non_compliant_fundamentals()},
         profiles={"AAPL": clean_profile()},
     )
-    output = run_portfolio_review(make_test_config(), broker, market_data)
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
     holding = output.holdings[0]
     assert holding.candidate is not None
     assert holding.candidate.halal.status == "non_compliant"
@@ -151,7 +154,7 @@ def test_unmatched_holding_still_appears_with_candidate_none():
         instruments=[],
     )
     output = run_portfolio_review(
-        make_test_config(), broker, FakeMarketDataProvider({}, {}, {})
+        make_test_config(), broker, FakeMarketDataProvider({}, {}, {}), EXCLUSIONS
     )
     assert len(output.holdings) == 1
     assert output.holdings[0].candidate is None
@@ -162,7 +165,7 @@ def test_account_summary_passed_through_unchanged():
         accounts=make_account_summary(), positions=[], instruments=[]
     )
     output = run_portfolio_review(
-        make_test_config(), broker, FakeMarketDataProvider({}, {}, {})
+        make_test_config(), broker, FakeMarketDataProvider({}, {}, {}), EXCLUSIONS
     )
     assert output.account_summary == make_account_summary()
 
@@ -180,7 +183,7 @@ def test_matched_holding_has_market_data_but_no_entry_still_candidate_none():
         instruments=[aapl_instrument()],
     )
     output = run_portfolio_review(
-        make_test_config(), broker, FakeMarketDataProvider({}, {}, {})
+        make_test_config(), broker, FakeMarketDataProvider({}, {}, {}), EXCLUSIONS
     )
     assert len(output.holdings) == 1
     assert output.holdings[0].position.ticker == "AAPL_US_EQ"
@@ -201,7 +204,7 @@ def test_matched_holding_produces_candidate_using_short_name_as_ticker():
         fundamentals={"AAPL": compliant_fundamentals()},
         profiles={"AAPL": clean_profile()},
     )
-    output = run_portfolio_review(make_test_config(), broker, market_data)
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
     holding = output.holdings[0]
     assert holding.candidate is not None
     assert holding.candidate.ticker == "AAPL"
@@ -224,7 +227,7 @@ def test_multiple_holdings_mixed_matched_and_unmatched():
         fundamentals={"AAPL": compliant_fundamentals()},
         profiles={"AAPL": clean_profile()},
     )
-    output = run_portfolio_review(make_test_config(), broker, market_data)
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
     assert len(output.holdings) == 2
     by_ticker = {h.position.ticker: h for h in output.holdings}
     assert by_ticker["AAPL_US_EQ"].candidate is not None
@@ -235,3 +238,216 @@ def test_holding_result_is_dataclass_with_position_and_candidate_fields():
     holding = HoldingResult(position=make_position(), candidate=None)
     assert holding.position.ticker == "AAPL_US_EQ"
     assert holding.candidate is None
+
+
+# --- Why a holding has no candidate (Fixes 3 and 7) ---
+
+from stock_advisor.reporting.schema import (  # noqa: E402
+    REASON_MARKET_DATA_ERROR,
+    REASON_NO_MARKET_DATA,
+    REASON_POOLED_FUND,
+    REASON_UNMATCHED_INSTRUMENT,
+)
+
+
+class RaisingMarketDataProvider(FakeMarketDataProvider):
+    """Raises a generic exception (not KeyError) for chosen tickers -- what
+    the real YFinanceProvider does on a rate limit, connection error, or
+    malformed response, and what the old `except KeyError` did not catch.
+    """
+
+    def __init__(self, failing: set[str], **kwargs):
+        super().__init__(**kwargs)
+        self._failing = failing
+
+    def get_price_history(self, ticker: str, period: str = "1y") -> PriceSeries:
+        if ticker in self._failing:
+            raise RuntimeError(f"simulated provider backend failure for {ticker}")
+        return super().get_price_history(ticker)
+
+
+def etf_instrument(ticker: str = "VUSA_EQ", short_name: str = "VUSA") -> Instrument:
+    return Instrument(
+        ticker=ticker,
+        name="Vanguard S&P 500 UCITS ETF",
+        short_name=short_name,
+        isin="IE00B3XXRP09",
+        currency_code="GBX",
+        type="ETF",
+    )
+
+
+def test_screened_holding_has_no_reason():
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position()],
+        instruments=[aapl_instrument()],
+    )
+    market_data = FakeMarketDataProvider(
+        prices={"AAPL": bullish_price_series()},
+        fundamentals={"AAPL": compliant_fundamentals()},
+        profiles={"AAPL": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    assert output.holdings[0].candidate is not None
+    assert output.holdings[0].reason is None
+
+
+def test_unmatched_holding_reports_the_unmatched_reason():
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position(ticker="ZZZZ_XX_EQ")],
+        instruments=[],
+    )
+    output = run_portfolio_review(
+        make_test_config(), broker, FakeMarketDataProvider({}, {}, {}), EXCLUSIONS
+    )
+    assert output.holdings[0].candidate is None
+    assert output.holdings[0].reason == REASON_UNMATCHED_INSTRUMENT
+
+
+def test_matched_holding_with_no_market_data_entry_reports_coverage_gap():
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position()],
+        instruments=[aapl_instrument()],
+    )
+    output = run_portfolio_review(
+        make_test_config(), broker, FakeMarketDataProvider({}, {}, {}), EXCLUSIONS
+    )
+    assert output.holdings[0].candidate is None
+    assert output.holdings[0].reason == REASON_NO_MARKET_DATA
+
+
+def test_fetch_failure_is_distinguishable_from_a_coverage_gap():
+    """The Fix-3 requirement: a consumer must be able to tell "we couldn't
+    look" from "there's nothing to see" -- and neither may crash the run.
+    """
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position()],
+        instruments=[aapl_instrument()],
+    )
+    market_data = RaisingMarketDataProvider(
+        failing={"AAPL"},
+        prices={"AAPL": bullish_price_series()},
+        fundamentals={"AAPL": compliant_fundamentals()},
+        profiles={"AAPL": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    assert len(output.holdings) == 1
+    assert output.holdings[0].candidate is None
+    assert output.holdings[0].reason == REASON_MARKET_DATA_ERROR
+    assert output.holdings[0].reason != REASON_NO_MARKET_DATA
+
+
+def test_one_failing_holding_does_not_lose_the_others():
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position("AAPL_US_EQ"), make_position("MSFT_US_EQ")],
+        instruments=[
+            aapl_instrument(),
+            Instrument(
+                ticker="MSFT_US_EQ",
+                name="Microsoft Corp",
+                short_name="MSFT",
+                isin="US5949181045",
+                currency_code="USD",
+                type="STOCK",
+            ),
+        ],
+    )
+    market_data = RaisingMarketDataProvider(
+        failing={"AAPL"},
+        prices={"MSFT": bullish_price_series(), "AAPL": bullish_price_series()},
+        fundamentals={"MSFT": compliant_fundamentals(), "AAPL": compliant_fundamentals()},
+        profiles={"MSFT": clean_profile(), "AAPL": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    by_ticker = {h.position.ticker: h for h in output.holdings}
+    assert by_ticker["AAPL_US_EQ"].reason == REASON_MARKET_DATA_ERROR
+    assert by_ticker["MSFT_US_EQ"].candidate is not None
+
+
+def test_held_etf_is_not_screened_and_says_why():
+    """Fix 7: the spec excludes pooled funds from candidacy "regardless of
+    halal status". A held ETF was being screened and scored exactly like an
+    individual stock.
+    """
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position(ticker="VUSA_EQ")],
+        instruments=[etf_instrument()],
+    )
+    market_data = FakeMarketDataProvider(
+        prices={"VUSA": bullish_price_series()},
+        fundamentals={"VUSA": compliant_fundamentals()},
+        profiles={"VUSA": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    assert len(output.holdings) == 1
+    assert output.holdings[0].position.ticker == "VUSA_EQ"
+    assert output.holdings[0].candidate is None
+    assert output.holdings[0].reason == REASON_POOLED_FUND
+
+
+def test_held_etf_still_appears_alongside_screened_stocks():
+    """Excluded from candidacy, never dropped from the report."""
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position("AAPL_US_EQ"), make_position("VUSA_EQ")],
+        instruments=[aapl_instrument(), etf_instrument()],
+    )
+    market_data = FakeMarketDataProvider(
+        prices={"AAPL": bullish_price_series(), "VUSA": bullish_price_series()},
+        fundamentals={"AAPL": compliant_fundamentals(), "VUSA": compliant_fundamentals()},
+        profiles={"AAPL": clean_profile(), "VUSA": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    assert len(output.holdings) == 2
+    by_ticker = {h.position.ticker: h for h in output.holdings}
+    assert by_ticker["AAPL_US_EQ"].candidate is not None
+    assert by_ticker["VUSA_EQ"].candidate is None
+    assert by_ticker["VUSA_EQ"].reason == REASON_POOLED_FUND
+
+
+def test_non_stock_instrument_types_other_than_etf_are_also_excluded():
+    """The rule is an allow-list on "STOCK", not a deny-list on "ETF", so an
+    unfamiliar pooled type can't slip through.
+    """
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position(ticker="FUND_EQ")],
+        instruments=[etf_instrument(ticker="FUND_EQ", short_name="FUND")],
+    )
+    broker._instruments[0].type = "ETC"
+    output = run_portfolio_review(
+        make_test_config(), broker, FakeMarketDataProvider({}, {}, {}), EXCLUSIONS
+    )
+    assert output.holdings[0].reason == REASON_POOLED_FUND
+
+
+def test_review_does_no_file_io_of_its_own():
+    """run_portfolio_review's docstring claims no I/O beyond the injected
+    providers; it used to call load_exclusions() anyway. A sentinel
+    exclusion list proves it screens with what it was handed.
+    """
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position()],
+        instruments=[aapl_instrument()],
+    )
+    market_data = FakeMarketDataProvider(
+        prices={"AAPL": bullish_price_series()},
+        fundamentals={"AAPL": compliant_fundamentals()},
+        profiles={"AAPL": clean_profile()},
+    )
+    output = run_portfolio_review(
+        make_test_config(), broker, market_data, ["productivity software"]
+    )
+    assert output.holdings[0].candidate.halal.status == "non_compliant"
+
+
+def test_holding_result_reason_defaults_to_none():
+    holding = HoldingResult(position=make_position(), candidate=None)
+    assert holding.reason is None

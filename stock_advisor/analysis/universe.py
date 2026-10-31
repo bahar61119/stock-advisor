@@ -8,6 +8,15 @@ files in `data/universe/`:
    single deduplicated, order-preserving list.
 2. `match_broker_tradable` takes that universe and a broker's `Instrument`
    list and reports which universe tickers the broker can actually trade.
+
+The bundled ticker files are stored in the market-data provider's symbol
+format (yfinance: `HSBA.L`, `BRK-B`), not as bare index symbols — see
+`data/universe/SOURCES.md`. That is load-bearing for `load_universe`'s dedup
+as well as for the provider: five symbols (`ADM`, `BA`, `BBY`, `PRU`,
+`TSCO`) are both a US ticker and a *different* company's London EPIC, so
+with bare strings the union silently collapsed each pair into one entry and
+dropped the London company. Suffixed, they are distinct strings and both
+survive.
 """
 import json
 from dataclasses import dataclass
@@ -16,6 +25,22 @@ from pathlib import Path
 from stock_advisor.providers.broker.base import Instrument
 
 DEFAULT_DATA_DIR = str(Path(__file__).resolve().parent.parent.parent / "data" / "universe")
+
+# The bundled universe files are stored in the symbol format the configured
+# market-data provider (yfinance) needs: an explicit `.L` suffix for London
+# listings, and a hyphen for US share-class suffixes (`BRK-B`). See
+# data/universe/SOURCES.md.
+#
+# The broker, however, keys instruments on a bare `shortName` whose exact
+# spelling for a London listing is not something this codebase can verify
+# without live API credentials (it may be "HSBA", "HSBA.L", or similar). So
+# `match_broker_tradable` tries the universe ticker as-is first and then the
+# de-suffixed form, with a currency guard described below.
+LSE_SUFFIX = ".L"
+
+# Currency codes Trading212 uses for London listings (GBX is pence-quoted).
+# Compared case-insensitively.
+LSE_CURRENCY_CODES = frozenset({"GBX", "GBP"})
 
 
 @dataclass
@@ -53,31 +78,79 @@ def load_universe(sources: list[str], data_dir: str = DEFAULT_DATA_DIR) -> list[
     return tickers
 
 
+def _is_lse_currency(currency_code: str) -> bool:
+    """Whether a broker instrument's currency marks it as a London listing."""
+    return currency_code.upper() in LSE_CURRENCY_CODES
+
+
+def _lookup_keys(ticker: str) -> list[tuple[str, bool]]:
+    """Broker `short_name` spellings to try for one universe ticker, in
+    priority order, each paired with whether the matched instrument must be a
+    London listing.
+
+    The universe ticker's suffix declares its exchange, and that is what
+    prevents the cross-listing collisions this translation exists to avoid:
+    `ADM`, `BA`, `BBY`, `PRU` and `TSCO` are all *both* a US ticker and a
+    different company's London EPIC. So:
+
+    - A `.L` ticker (`BA.L`, BAE Systems) is tried verbatim, then as the bare
+      EPIC (`BA`) but **only** against a GBX/GBP instrument — so it can never
+      match US-listed Boeing.
+    - A bare ticker (`BA`, Boeing) is tried verbatim but **only** against a
+      non-GBX/GBP instrument — so it can never match BAE Systems either, even
+      if the broker happens to list BAE first.
+    - `BT-A.L` additionally tries the dot form of the EPIC (`BT.A`), since
+      the hyphen there is a yfinance spelling, not the LSE's.
+    - A hyphenated US ticker (`BRK-B`) additionally tries the dot form
+      (`BRK.B`), which is how most other sources render a share class.
+    """
+    if ticker.upper().endswith(LSE_SUFFIX):
+        base = ticker[: -len(LSE_SUFFIX)]
+        keys = [(ticker.lower(), True), (base.lower(), True)]
+        if "-" in base:
+            keys.append((base.replace("-", ".").lower(), True))
+        return keys
+
+    keys = [(ticker.lower(), False)]
+    if "-" in ticker:
+        keys.append((ticker.replace("-", ".").lower(), False))
+    return keys
+
+
 def match_broker_tradable(
     universe: list[str], instruments: list[Instrument]
 ) -> UniverseMatchResult:
     """Match a scan universe against the broker's tradable instruments.
 
-    A universe ticker matches an instrument when they are equal
-    case-insensitively to the instrument's `short_name` — but only for
-    instruments whose `type` is exactly `"STOCK"`; any other type (e.g.
-    `"ETF"`) is never a match candidate, even if its `short_name` happens to
-    equal a universe ticker. At most one match is reported per universe
-    ticker (the first stock instrument found with that short name); universe
-    order is preserved in both `matched` and `unmatched`.
+    A universe ticker matches an instrument when the instrument's
+    `short_name` equals one of the ticker's `_lookup_keys` spellings
+    case-insensitively AND the instrument is on the exchange the ticker's
+    suffix implies (see `_lookup_keys`) — but only for instruments whose
+    `type` is exactly `"STOCK"`; any other type (e.g. `"ETF"`) is never a
+    match candidate, even if its `short_name` happens to equal a universe
+    ticker. At most one match is reported per universe ticker (the first
+    stock instrument found under the highest-priority spelling that matches);
+    universe order is preserved in both `matched` and `unmatched`.
     """
-    stock_by_short_name: dict[str, str] = {}
+    stocks_by_short_name: dict[str, list[Instrument]] = {}
     for instrument in instruments:
         if instrument.type != "STOCK":
             continue
-        key = instrument.short_name.lower()
-        if key not in stock_by_short_name:
-            stock_by_short_name[key] = instrument.ticker
+        stocks_by_short_name.setdefault(instrument.short_name.lower(), []).append(
+            instrument
+        )
 
     matched: list[tuple[str, str]] = []
     unmatched: list[str] = []
     for ticker in universe:
-        broker_ticker = stock_by_short_name.get(ticker.lower())
+        broker_ticker: str | None = None
+        for key, want_lse in _lookup_keys(ticker):
+            for instrument in stocks_by_short_name.get(key, ()):
+                if _is_lse_currency(instrument.currency_code) == want_lse:
+                    broker_ticker = instrument.ticker
+                    break
+            if broker_ticker is not None:
+                break
         if broker_ticker is not None:
             matched.append((ticker, broker_ticker))
         else:
