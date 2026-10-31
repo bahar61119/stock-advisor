@@ -1,0 +1,5 @@
+# Development and test dependencies. Includes the runtime set.
+-r requirements.txt
+
+pytest
+requests-mock

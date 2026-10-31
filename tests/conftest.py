@@ -68,7 +68,7 @@ def make_fake_broker_provider():
                 short_name="ASML",
                 isin="NL0010273215",
                 currency_code="EUR",
-                type="stock",
+                type="STOCK",
             )
         ]
 

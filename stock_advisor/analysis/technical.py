@@ -6,8 +6,15 @@ from stock_advisor.providers.market_data.base import PriceSeries
 
 
 @dataclass
-class TechnicalSignal:
-    """Technical analysis signal with component indicators and composite verdict."""
+class TechnicalComponents:
+    """The individual indicator readings, before they are classified.
+
+    Split out from `TechnicalSignal` so a verdict can be computed from the
+    components without first constructing a `TechnicalSignal` that has no
+    verdict yet -- which previously meant building one with `verdict=None`,
+    in violation of its own `Literal` annotation, and then building a second
+    one with the real verdict.
+    """
 
     sma_50: float | None
     sma_200: float | None
@@ -15,6 +22,16 @@ class TechnicalSignal:
     macd_line: float | None
     macd_signal_line: float | None
     volume_trend: Literal["rising", "flat", "falling"] | None
+
+
+@dataclass
+class TechnicalSignal(TechnicalComponents):
+    """Technical analysis signal with component indicators and composite verdict.
+
+    Field order is inherited (the six components, then `verdict`), so this is
+    constructed exactly as before.
+    """
+
     verdict: Literal["bullish", "neutral", "bearish"]
 
 
@@ -53,15 +70,11 @@ def compute_rsi(closes: list[float], window: int) -> float | None:
             gains.append(0.0)
             losses.append(-delta)
 
-    # First average: SMA over first `window` periods
-    avg_gain = sum(gains[:window]) / window
-    avg_loss = sum(losses[:window]) / window
-
-    # Subsequent averages: EMA with k = 2 / (window + 1)
-    k = 2.0 / (window + 1)
-    for i in range(window, len(gains)):
-        avg_gain = gains[i] * k + avg_gain * (1 - k)
-        avg_loss = losses[i] * k + avg_loss * (1 - k)
+    # Average gain/loss: SMA over the first `window` periods, then an EMA --
+    # exactly what compute_ema does (it seeds from the same SMA and uses the
+    # same k = 2 / (window + 1)), so reuse it rather than inlining it again.
+    avg_gain = compute_ema(gains, window)[-1]
+    avg_loss = compute_ema(losses, window)[-1]
 
     # Avoid division by zero
     if avg_gain + avg_loss == 0:
@@ -174,8 +187,13 @@ def compute_volume_trend(
         return "falling"
 
 
-def classify_verdict(signal: TechnicalSignal) -> Literal["bullish", "neutral", "bearish"]:
+def classify_verdict(
+    signal: TechnicalComponents,
+) -> Literal["bullish", "neutral", "bearish"]:
     """Classify verdict based on individual signal components.
+
+    Takes `TechnicalComponents` (a `TechnicalSignal` is also accepted, being
+    a subclass) so it can be called before a verdict exists.
 
     Counts bullish and bearish points:
     - Bullish: sma_50 > sma_200, macd_line > macd_signal_line, 30 < rsi_14 < 70, volume_trend == "rising"
@@ -239,24 +257,13 @@ def compute_technical_signal(series: PriceSeries) -> TechnicalSignal:
     macd_line, macd_signal_line = compute_macd(closes, fast=12, slow=26, signal=9)
     volume_trend = compute_volume_trend(volumes, window=20)
 
-    # Determine verdict using classify_verdict
-    signal = TechnicalSignal(
+    # Classify from the components, then build the signal once.
+    components = TechnicalComponents(
         sma_50=sma_50,
         sma_200=sma_200,
         rsi_14=rsi_14,
         macd_line=macd_line,
         macd_signal_line=macd_signal_line,
         volume_trend=volume_trend,
-        verdict=None,
     )
-    verdict = classify_verdict(signal)
-
-    return TechnicalSignal(
-        sma_50=sma_50,
-        sma_200=sma_200,
-        rsi_14=rsi_14,
-        macd_line=macd_line,
-        macd_signal_line=macd_signal_line,
-        volume_trend=volume_trend,
-        verdict=verdict,
-    )
+    return TechnicalSignal(**vars(components), verdict=classify_verdict(components))

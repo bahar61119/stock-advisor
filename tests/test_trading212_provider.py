@@ -170,3 +170,196 @@ def test_base_url_uses_env_parameter(requests_mock, monkeypatch):
     )
     Trading212BrokerProvider(env="live").get_account_summary()
     assert requests_mock.called
+
+
+# --- Domain errors instead of raw HTTP/parse exceptions (Fix 8) ---
+
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+import requests  # noqa: E402
+
+from stock_advisor.providers.broker.trading212 import Trading212Error  # noqa: E402
+
+
+def creds(monkeypatch):
+    monkeypatch.setenv("T212_API_KEY", "k")
+    monkeypatch.setenv("T212_API_SECRET", "s")
+
+
+def test_401_raises_domain_error_naming_the_credential_variables(requests_mock, monkeypatch):
+    """The first-run failure mode is almost always a bad key, and a bare
+    requests.HTTPError doesn't say which variables to check.
+    """
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/account/summary",
+        status_code=401,
+        json={"error": "unauthorized"},
+    )
+    with pytest.raises(Trading212Error) as excinfo:
+        Trading212BrokerProvider(env="demo").get_account_summary()
+    message = str(excinfo.value)
+    assert excinfo.value.status_code == 401
+    assert "credentials rejected" in message
+    assert "T212_API_KEY" in message
+    assert "T212_API_KEY_STOCKS_ISA" in message
+
+
+def test_401_domain_error_is_not_a_bare_http_error(requests_mock, monkeypatch):
+    """requests.HTTPError must no longer reach the caller -- that is what
+    made 401, 429 and 5xx indistinguishable.
+    """
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/positions",
+        status_code=401,
+        json={},
+    )
+    with pytest.raises(Trading212Error) as excinfo:
+        Trading212BrokerProvider(env="demo").get_positions()
+    assert not isinstance(excinfo.value, requests.HTTPError)
+
+
+def test_429_raises_domain_error_mentioning_rate_limiting(requests_mock, monkeypatch, tmp_path):
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/metadata/instruments",
+        status_code=429,
+        json={},
+    )
+    provider = Trading212BrokerProvider(
+        env="demo", instrument_cache_path=str(tmp_path / "missing.json")
+    )
+    with pytest.raises(Trading212Error, match="rate limited"):
+        provider.get_instruments()
+
+
+def test_other_status_codes_get_a_generic_but_identifiable_message(requests_mock, monkeypatch):
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/account/summary",
+        status_code=503,
+        json={},
+    )
+    with pytest.raises(Trading212Error) as excinfo:
+        Trading212BrokerProvider(env="demo").get_account_summary()
+    assert excinfo.value.status_code == 503
+    assert "HTTP 503" in str(excinfo.value)
+
+
+def test_non_json_response_body_raises_domain_error(requests_mock, monkeypatch):
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/account/summary",
+        status_code=200,
+        text="<html>maintenance</html>",
+    )
+    with pytest.raises(Trading212Error, match="non-JSON body"):
+        Trading212BrokerProvider(env="demo").get_account_summary()
+
+
+def test_transport_failure_raises_domain_error(requests_mock, monkeypatch):
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/account/summary",
+        exc=requests.ConnectTimeout("connection timed out"),
+    )
+    with pytest.raises(Trading212Error, match="before a response"):
+        Trading212BrokerProvider(env="demo").get_account_summary()
+
+
+# --- A corrupted instrument cache is a cache miss, not a crash ---
+
+
+FRESH_INSTRUMENT = {
+    "ticker": "MSFT_US_EQ",
+    "name": "Microsoft",
+    "shortName": "MSFT",
+    "isin": "US5949181045",
+    "currencyCode": "USD",
+    "type": "STOCK",
+}
+
+
+@pytest.mark.parametrize(
+    "corrupt_contents",
+    [
+        '[{"ticker": "AAPL_US_EQ", "name": "App',  # truncated mid-write
+        "not json at all",
+        "",
+        '[{"ticker": "AAPL_US_EQ"}]',  # valid JSON, missing required keys
+        '{"instruments": []}',  # valid JSON, wrong shape entirely
+    ],
+    ids=["truncated", "garbage", "empty", "missing-keys", "wrong-shape"],
+)
+def test_corrupted_cache_is_treated_as_a_miss_and_refetched(
+    corrupt_contents, tmp_path, requests_mock, monkeypatch
+):
+    """A truncated cache is exactly what an interrupted run leaves behind.
+    A cache is an optimization; a bad one should cost a request, not the run.
+    """
+    creds(monkeypatch)
+    cache_file = tmp_path / "instruments.json"
+    cache_file.write_text(corrupt_contents)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/metadata/instruments",
+        json=[FRESH_INSTRUMENT],
+    )
+    provider = Trading212BrokerProvider(
+        env="demo", instrument_cache_path=str(cache_file), cache_max_age_seconds=3600
+    )
+    instruments = provider.get_instruments()
+    assert [i.short_name for i in instruments] == ["MSFT"]
+    assert requests_mock.call_count == 1
+
+
+def test_corrupted_cache_is_overwritten_with_the_refetched_payload(
+    tmp_path, requests_mock, monkeypatch
+):
+    """The repair has to stick, or every subsequent run pays for it again."""
+    creds(monkeypatch)
+    cache_file = tmp_path / "instruments.json"
+    cache_file.write_text("{{{ truncated")
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/metadata/instruments",
+        json=[FRESH_INSTRUMENT],
+    )
+    provider = Trading212BrokerProvider(
+        env="demo", instrument_cache_path=str(cache_file), cache_max_age_seconds=3600
+    )
+    provider.get_instruments()
+    assert json.loads(cache_file.read_text()) == [FRESH_INSTRUMENT]
+
+
+def test_unreadable_cache_path_is_treated_as_a_miss(tmp_path, requests_mock, monkeypatch):
+    """A directory where a cache file should be: an OSError on read, which
+    must fall through to the fetch path -- and the subsequent failed *write*
+    must not abort the run either.
+    """
+    creds(monkeypatch)
+    cache_path = tmp_path / "instruments.json"
+    cache_path.mkdir()
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/metadata/instruments",
+        json=[FRESH_INSTRUMENT],
+    )
+    provider = Trading212BrokerProvider(
+        env="demo", instrument_cache_path=str(cache_path), cache_max_age_seconds=3600
+    )
+    assert provider.get_instruments()[0].short_name == "MSFT"
+
+
+def test_malformed_api_payload_raises_domain_error_not_key_error(
+    requests_mock, monkeypatch, tmp_path
+):
+    creds(monkeypatch)
+    requests_mock.get(
+        "https://demo.trading212.com/api/v0/equity/metadata/instruments",
+        json=[{"ticker": "AAPL_US_EQ"}],
+    )
+    provider = Trading212BrokerProvider(
+        env="demo", instrument_cache_path=str(tmp_path / "missing.json")
+    )
+    with pytest.raises(Trading212Error, match="not in the expected"):
+        provider.get_instruments()

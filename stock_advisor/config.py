@@ -6,6 +6,12 @@ from typing import Optional
 import yaml
 
 
+# config/config.yaml, resolved relative to this file so it works regardless
+# of the caller's current working directory -- the same pattern
+# halal_screen.py (DEFAULT_EXCLUSIONS_PATH) and universe.py
+# (DEFAULT_DATA_DIR) already use.
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+
 # Valid provider names
 VALID_BROKERS = {"trading212"}
 VALID_MARKET_DATA_PROVIDERS = {"yfinance"}
@@ -58,7 +64,9 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     Load and validate application configuration from a YAML file.
 
     Args:
-        path: Path to the config file. If None, uses default 'config/config.yaml'.
+        path: Path to the config file. If None, uses the bundled
+            `config/config.yaml`, resolved relative to this module rather
+            than to the current working directory.
 
     Returns:
         AppConfig: Validated configuration object.
@@ -67,7 +75,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         ValueError: If broker/market-data provider is invalid or required keys are missing.
     """
     if path is None:
-        path = "config/config.yaml"
+        path = DEFAULT_CONFIG_PATH
 
     config_path = Path(path)
     with open(config_path, "r") as f:

@@ -25,6 +25,41 @@ DEFAULT_INSTRUMENT_CACHE_PATH = ".cache/t212_instruments.json"
 DEFAULT_CACHE_MAX_AGE_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 10
 
+# Likely cause per HTTP status, phrased for the person running the tool
+# rather than for a log aggregator. The first-run failure mode for this tool
+# is almost always a bad or missing API key, and a bare requests.HTTPError
+# ("401 Client Error: Unauthorized for url: ...") does not say which
+# environment variables to go and check.
+_STATUS_CAUSES = {
+    401: (
+        "credentials rejected, check T212_API_KEY/T212_API_SECRET or "
+        "T212_API_KEY_STOCKS_ISA/T212_API_SECRET_STOCKS_ISA"
+    ),
+    403: (
+        "credentials accepted but not permitted for this endpoint -- check "
+        "the API key's scopes in Trading212 Settings -> API"
+    ),
+    429: (
+        "rate limited by Trading212 (the instruments endpoint allows one "
+        "request per 50 seconds); retry later"
+    ),
+}
+
+
+class Trading212Error(RuntimeError):
+    """A Trading212 API call failed in a way worth explaining.
+
+    Carries the HTTP status code (when there was one) alongside a
+    human-readable likely cause, so a misconfigured key surfaces as an
+    actionable message instead of a raw `requests.HTTPError` traceback. The
+    originating exception is kept as `__cause__` via `raise ... from`, so
+    nothing is lost for debugging.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class Trading212BrokerProvider(BrokerProvider):
     """Broker provider backed by the real Trading212 REST API."""
@@ -78,14 +113,48 @@ class Trading212BrokerProvider(BrokerProvider):
 
         A timeout is applied so a slow or hanging Trading212 endpoint cannot
         block this call (and whatever pipeline is waiting on it) forever.
+
+        Every failure mode is translated into `Trading212Error` with a likely
+        cause: an error status (401/403/429 named specifically, anything else
+        generically), a transport failure, or a response body that isn't
+        JSON. Letting `raise_for_status()`'s bare `HTTPError` propagate made
+        401, 429 and 500 indistinguishable to the person reading the
+        traceback, which matters most for the one failure that is almost
+        always the cause on a first run: a bad API key.
         """
-        response = requests.get(
-            f"{self._base_url}{path}",
-            headers=self._headers(),
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        return response.json()
+        url = f"{self._base_url}{path}"
+        try:
+            response = requests.get(
+                url,
+                headers=self._headers(),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            raise Trading212Error(
+                f"Trading212 request to {path} failed before a response "
+                f"arrived (network error or timeout): {exc}"
+            ) from exc
+
+        status = response.status_code
+        if not response.ok:
+            cause = _STATUS_CAUSES.get(
+                status,
+                "unexpected response from Trading212; its API is in beta and "
+                "may have changed",
+            )
+            raise Trading212Error(
+                f"Trading212 returned HTTP {status} for {path} -- {cause}.",
+                status_code=status,
+            )
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise Trading212Error(
+                f"Trading212 returned a non-JSON body for {path} (HTTP "
+                f"{status}); its API is in beta and may have changed.",
+                status_code=status,
+            ) from exc
 
     def get_account_summary(self) -> AccountSummary:
         """Fetch and map the account summary from Trading212."""
@@ -136,24 +205,63 @@ class Trading212BrokerProvider(BrokerProvider):
         and returns a large (~5MB) payload, so this reads a cached copy when
         it exists and is fresher than cache_max_age_seconds; otherwise it
         calls the API and overwrites the cache file.
+
+        An unreadable or corrupted cache file is treated as a cache miss and
+        re-fetched (overwriting it), rather than crashing with a raw
+        `JSONDecodeError` or `KeyError`. A cache is an optimization; a
+        truncated one -- which is exactly what a run interrupted mid-write
+        leaves behind -- should cost a request, not the whole run.
         """
-        if self._cache_is_fresh():
-            with open(self._instrument_cache_path, "r") as f:
-                raw = json.load(f)
-        else:
+        raw = self._read_cache()
+        if raw is None:
             raw = self._get("/api/v0/equity/metadata/instruments")
             self._write_cache(raw)
-        return [
-            Instrument(
-                ticker=item["ticker"],
-                name=item["name"],
-                short_name=item["shortName"],
-                isin=item["isin"],
-                currency_code=item["currencyCode"],
-                type=item["type"],
-            )
-            for item in raw
-        ]
+        return self._parse_instruments(raw)
+
+    @staticmethod
+    def _parse_instruments(raw) -> list[Instrument]:
+        """Map the raw instruments payload to `Instrument` objects.
+
+        Raises `Trading212Error` rather than a bare `KeyError`/`TypeError` if
+        the payload doesn't have the documented shape -- that is a changed
+        beta API, and saying so is more use than the name of one key.
+        """
+        try:
+            return [
+                Instrument(
+                    ticker=item["ticker"],
+                    name=item["name"],
+                    short_name=item["shortName"],
+                    isin=item["isin"],
+                    currency_code=item["currencyCode"],
+                    type=item["type"],
+                )
+                for item in raw
+            ]
+        except (KeyError, TypeError) as exc:
+            raise Trading212Error(
+                "Trading212 instruments payload was not in the expected "
+                f"shape ({exc!r}); its API is in beta and may have changed."
+            ) from exc
+
+    def _read_cache(self):
+        """Return the cached instruments payload, or `None` for a cache miss.
+
+        A miss is: no file, a stale file, an unreadable file, a file that
+        isn't valid JSON, or a file whose contents aren't instrument-shaped.
+        Every one of those falls through to a re-fetch.
+        """
+        if not self._cache_is_fresh():
+            return None
+        try:
+            with open(self._instrument_cache_path, "r") as f:
+                raw = json.load(f)
+            # Validate before trusting it, so a partially-written cache is a
+            # miss rather than a crash deeper in the pipeline.
+            self._parse_instruments(raw)
+            return raw
+        except (OSError, ValueError, Trading212Error):
+            return None
 
     def _cache_is_fresh(self) -> bool:
         """Return True if the cache file exists and is within the max age."""
@@ -163,9 +271,19 @@ class Trading212BrokerProvider(BrokerProvider):
         return age < self._cache_max_age_seconds
 
     def _write_cache(self, raw) -> None:
-        """Write the raw instruments payload to the cache file."""
-        cache_dir = os.path.dirname(self._instrument_cache_path)
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-        with open(self._instrument_cache_path, "w") as f:
-            json.dump(raw, f)
+        """Write the raw instruments payload to the cache file.
+
+        A write failure (unwritable directory, full disk, the cache path
+        occupied by a directory) is swallowed: the payload has already been
+        fetched and the caller can be served from it, so failing to *save*
+        it should cost the next run a request, not abort this one. Same
+        reasoning as treating an unreadable cache as a miss.
+        """
+        try:
+            cache_dir = os.path.dirname(self._instrument_cache_path)
+            if cache_dir:
+                os.makedirs(cache_dir, exist_ok=True)
+            with open(self._instrument_cache_path, "w") as f:
+                json.dump(raw, f)
+        except OSError:
+            return

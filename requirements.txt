@@ -1,7 +1,6 @@
+# Runtime dependencies. Dev/test-only packages live in requirements-dev.txt.
 requests
 pyyaml
 yfinance
 pandas
 numpy
-pytest
-requests-mock

@@ -36,6 +36,13 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+`requirements.txt` is the runtime set. To run the tests as well, install the
+dev set instead (it includes the runtime one):
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ## Trading212 API credentials
 
 1. In the Trading212 app: **Settings → API** (beta feature — enable it if
@@ -53,6 +60,11 @@ pip install -r requirements.txt
    take priority if both are set — see
    `stock_advisor/providers/broker/trading212.py`) and `T212_ENV`
    (`demo` or `live`). `.env` is gitignored; never commit it.
+
+   `T212_ENV` selects which Trading212 host the scripts talk to and
+   **defaults to `live` when unset** — set it to `demo` explicitly if that's
+   what you want. (Note that everything here is read-only either way; no
+   order endpoint is ever called.)
 
 4. Export those variables into the shell/session that will actually run
    the scripts (source `.env` yourself, or let your Claude session's
@@ -108,26 +120,57 @@ one new module, not a rewrite:
   reference implementation; `fake.py` is the test double.
 
 Wire the new provider name into `VALID_BROKERS` /
-`VALID_MARKET_DATA_PROVIDERS` in `stock_advisor/config.py`, select it via
-`broker_provider` / `market_data_provider` in `config/config.yaml`, and
-instantiate it in `scripts/scan_market.py` / `scripts/review_portfolio.py`'s
-`main()`. Nothing else in the pipeline (technical signals, halal screen,
-universe matching, reporting schema) needs to change.
+`VALID_MARKET_DATA_PROVIDERS` in `stock_advisor/config.py`, add one dispatch
+line to `build_broker` / `build_market_data` in
+`stock_advisor/providers/factory.py`, and select it via `broker_provider` /
+`market_data_provider` in `config/config.yaml`. Both scripts build their
+providers through those factories, so nothing else in the pipeline
+(technical signals, halal screen, universe matching, reporting schema, the
+scripts themselves) needs to change.
 
-## Known limitation
+Note that `data/universe/*.json` ships in the **default market-data
+provider's symbol format** (yfinance: `HSBA.L`, `BRK-B`) — see
+`data/universe/SOURCES.md`. A provider with a different symbol convention
+needs those files translated, or a translation step in the new provider.
 
-`YFinanceProvider` doesn't raise a catchable error for a ticker it can't
-actually resolve — unlike the `FakeMarketDataProvider` used in tests, an
-unmapped or invalid ticker can come back from yfinance with hollow/empty
-fields rather than an exception. If a report shows a ticker with unusually
-sparse technical/fundamentals data, that can be a data-fetch problem rather
-than genuinely "insufficient data" — worth a second look rather than taking
-it at face value.
+## Known limitations
+
+**The halal screen checks three of four ratios, not four.** The
+non-permissible-income ratio (interest and other impermissible income over
+revenue) has no reliable free data source — no free provider publishes that
+figure, since it is a Shariah-specific aggregation. Rather than let that
+permanent gap force every single ticker to "insufficient data" forever
+(which would make the report's Halal-Compliant section permanently empty),
+the screen computes its verdict from the sector exclusions plus the three
+ratios it *can* compute, and attaches an explicit caveat to **every**
+verdict saying the fourth was not checked. A "compliant" verdict from this
+tool therefore means "passed the sector screen and the three computable
+ratios", not "AAOIFI compliant". See
+`stock_advisor/analysis/halal_screen.py`'s module docstring and
+`config/halal_exclusions.yaml`.
+
+**yfinance fails silently on an unresolvable ticker.** It doesn't raise a
+catchable error for a ticker it can't resolve — unlike the
+`FakeMarketDataProvider` used in tests, an unmapped or invalid ticker can
+come back with hollow/empty fields rather than an exception. If a report
+shows a ticker with unusually sparse technical/fundamentals data, that can
+be a data-fetch problem rather than genuinely "insufficient data" — worth a
+second look rather than taking it at face value. (This is why
+`data/universe/*.json` ships in yfinance's exact symbol format and why every
+symbol in it was verified to resolve.)
+
+**Coverage loss is reported, not hidden.** A ticker can drop out of a scan
+three ways, and the scan output names each one: `unmatched` (the broker
+doesn't offer it as a tradable stock), `no_market_data_tickers` (the
+provider has no entry for it), and `failed_tickers` (its fetch raised —
+typically rate limiting). A large `failed_tickers` list means the run was
+throttled and is worth re-running, not that those companies have no data.
 
 ## Running the tests
 
 ```bash
 source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest -v
 ```
 

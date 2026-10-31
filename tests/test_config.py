@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 from stock_advisor.config import load_config
 
 
@@ -59,3 +58,15 @@ def test_load_config_rejects_missing_key(tmp_path):
     bad.write_text("broker_provider: trading212\n")
     with pytest.raises(ValueError):
         load_config(str(bad))
+
+
+def test_load_config_default_path_is_cwd_independent(tmp_path, monkeypatch):
+    """load_config()'s default used to be the CWD-relative string
+    "config/config.yaml", so it only worked when run from the repo root --
+    unlike halal_screen.py and universe.py, which both resolve relative to
+    __file__. This pins the consistent behaviour.
+    """
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config()
+    assert cfg.broker_provider == "trading212"
+    assert cfg.market_data_provider == "yfinance"
