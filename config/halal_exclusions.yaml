@@ -19,6 +19,31 @@
 # exclusion-worthy text (a company's sector/industry string like "Banks—
 # Diversified" or a business summary mentioning "conventional banking") but
 # don't fire on a company that merely emerged from bankruptcy or blends tea.
+#
+# ---------------------------------------------------------------------------
+# What this list does NOT cover: the non-permissible-income ratio
+# ---------------------------------------------------------------------------
+# These keywords, plus the three market-cap ratios in `halal_thresholds`
+# (config/config.yaml), are the whole of the automated screen. The fourth
+# AAOIFI-style ratio — non-permissible (e.g. interest) income over total
+# revenue, capped at `non_permissible_income_ratio` — is configured but, with
+# the bundled yfinance market-data provider, is never actually computed: no
+# free data source publishes that figure, because it is a Shariah-specific
+# aggregation that general financial-data vendors do not produce.
+#
+# That gap is permanent and structural, not a per-ticker coverage hole, so
+# `screen()` does not let it force every company to "insufficient_data"
+# forever (which would make the screen look functional while screening
+# nothing). Instead every verdict carries an explicit caveat saying the ratio
+# was not checked — see the module docstring in
+# stock_advisor/analysis/halal_screen.py for the full reasoning.
+#
+# Practical consequence: a "compliant" verdict from this tool means "passed
+# the sector keywords above and the three computable ratios", not "AAOIFI
+# compliant". A company with large interest income (and no excluded-sector
+# keyword in its profile text) can still come back compliant here. If that
+# ratio matters to you, check it yourself against the company's filings, or
+# add keywords above for business models you want excluded outright.
 
 - conventional bank
 - commercial bank

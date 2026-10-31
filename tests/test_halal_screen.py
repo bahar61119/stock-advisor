@@ -1,5 +1,9 @@
 """Tests for the in-house AAOIFI-style halal screening module."""
-from stock_advisor.analysis.halal_screen import load_exclusions, screen
+from stock_advisor.analysis.halal_screen import (
+    NON_PERMISSIBLE_INCOME_CAVEAT,
+    load_exclusions,
+    screen,
+)
 from stock_advisor.config import HalalThresholds
 from stock_advisor.providers.market_data.base import CompanyProfile, Fundamentals
 
@@ -222,3 +226,179 @@ def test_business_summary_blending_does_not_trigger_lending_exclusion():
     )
     verdict = screen(profile, full_fundamentals(all_low=True), DEFAULT_THRESHOLDS, EXCLUSIONS)
     assert verdict.status == "compliant"
+
+
+# --- Non-permissible-income ratio: permanently unavailable, non-blocking ---
+#
+# These cover the design decision documented in halal_screen.py's module
+# docstring: `non_permissible_income_ratio` has no free data source at all, so
+# letting it force `insufficient_data` would make `compliant` (and therefore
+# `add_more`) unreachable for every ticker forever. It is reported honestly in
+# `missing_fields` and in `caveats`, but never blocks a verdict.
+
+
+def test_missing_only_non_permissible_income_is_compliant_not_insufficient():
+    """The core Fix-1 case: the three computable ratios all pass and only the
+    non-permissible-income inputs are absent -- the verdict must be
+    `compliant`, which is what makes `add_more` reachable in production.
+    """
+    fundamentals = make_fundamentals(
+        total_debt=1,
+        market_cap=100,
+        total_cash=1,
+        total_revenue=100,
+        non_permissible_income=None,
+        receivables=1,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "compliant"
+    assert verdict.failed_checks == []
+    assert verdict.missing_fields == ["non_permissible_income_ratio"]
+    assert verdict.ratios.non_permissible_income_ratio is None
+    assert NON_PERMISSIBLE_INCOME_CAVEAT in verdict.caveats
+
+
+def test_missing_non_permissible_income_does_not_mask_a_real_failure():
+    """Non-blocking must not mean non-screened: the other three ratios are
+    still enforced when the fourth is unavailable.
+    """
+    fundamentals = make_fundamentals(
+        total_debt=50,
+        market_cap=100,
+        total_cash=1,
+        total_revenue=100,
+        non_permissible_income=None,
+        receivables=1,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "non_compliant"
+    assert verdict.failed_checks == ["debt_to_market_cap"]
+
+
+def test_missing_non_permissible_income_plus_another_ratio_is_insufficient_data():
+    """A per-ticker gap in one of the three market-cap ratios still forces
+    `insufficient_data` -- the change is scoped to the fourth ratio only.
+    """
+    fundamentals = make_fundamentals(
+        total_debt=1,
+        market_cap=100,
+        total_cash=None,
+        total_revenue=100,
+        non_permissible_income=None,
+        receivables=1,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "insufficient_data"
+    assert "cash_and_interest_to_market_cap" in verdict.missing_fields
+    assert "non_permissible_income_ratio" in verdict.missing_fields
+
+
+def test_non_permissible_income_still_enforced_when_data_is_available():
+    """A provider that *can* supply the figure (not yfinance, but the
+    interface allows it) must still be screened against the threshold.
+    """
+    fundamentals = make_fundamentals(
+        total_debt=1,
+        market_cap=100,
+        total_cash=1,
+        total_revenue=100,
+        non_permissible_income=10,
+        receivables=1,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "non_compliant"
+    assert verdict.failed_checks == ["non_permissible_income_ratio"]
+
+
+def test_caveat_present_on_compliant_verdict():
+    verdict = screen(
+        clean_profile(), full_fundamentals(all_low=True), DEFAULT_THRESHOLDS, EXCLUSIONS
+    )
+    assert verdict.status == "compliant"
+    assert NON_PERMISSIBLE_INCOME_CAVEAT in verdict.caveats
+
+
+def test_caveat_present_on_non_compliant_verdict():
+    fundamentals = make_fundamentals(
+        total_debt=50,
+        market_cap=100,
+        total_cash=1,
+        total_revenue=100,
+        non_permissible_income=0,
+        receivables=1,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "non_compliant"
+    assert NON_PERMISSIBLE_INCOME_CAVEAT in verdict.caveats
+
+
+def test_caveat_present_on_insufficient_data_verdict():
+    verdict = screen(clean_profile(), make_fundamentals(), DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "insufficient_data"
+    assert NON_PERMISSIBLE_INCOME_CAVEAT in verdict.caveats
+
+
+def test_caveat_present_on_sector_excluded_verdict():
+    """The sector-exclusion early return is its own code path and must carry
+    the caveat too -- "every verdict" includes the short-circuited ones.
+    """
+    profile = CompanyProfile(sector="Gambling", industry=None, business_summary=None)
+    verdict = screen(profile, full_fundamentals(all_low=True), DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "non_compliant"
+    assert NON_PERMISSIBLE_INCOME_CAVEAT in verdict.caveats
+
+
+def test_caveat_text_names_the_ratio_and_tells_the_user_to_verify():
+    """The caveat is rendered verbatim to the user, so its substance (not
+    just its presence) is worth pinning down.
+    """
+    verdict = screen(
+        clean_profile(), full_fundamentals(all_low=True), DEFAULT_THRESHOLDS, EXCLUSIONS
+    )
+    caveat = verdict.caveats[0]
+    assert "Non-permissible income" in caveat
+    assert "no reliable free data source" in caveat.lower()
+    assert "Verify independently" in caveat
+
+
+# --- Zero-denominator guard ---
+
+
+def test_zero_market_cap_is_insufficient_data_not_zero_division():
+    """A present-but-zero denominator can't produce a meaningful ratio, so it
+    is reported as uncomputable rather than raising ZeroDivisionError.
+    """
+    fundamentals = make_fundamentals(
+        total_debt=5,
+        market_cap=0,
+        total_cash=5,
+        total_revenue=100,
+        non_permissible_income=0,
+        receivables=5,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "insufficient_data"
+    assert set(verdict.missing_fields) == {
+        "debt_to_market_cap",
+        "cash_and_interest_to_market_cap",
+        "receivables_and_cash_to_market_cap",
+    }
+    assert verdict.ratios.debt_to_market_cap is None
+
+
+def test_zero_total_revenue_leaves_non_permissible_ratio_uncomputed():
+    """Zero revenue blocks only the fourth ratio, which is non-blocking -- so
+    a company with the other three passing is still compliant.
+    """
+    fundamentals = make_fundamentals(
+        total_debt=1,
+        market_cap=100,
+        total_cash=1,
+        total_revenue=0,
+        non_permissible_income=0,
+        receivables=1,
+    )
+    verdict = screen(clean_profile(), fundamentals, DEFAULT_THRESHOLDS, EXCLUSIONS)
+    assert verdict.status == "compliant"
+    assert verdict.missing_fields == ["non_permissible_income_ratio"]
+    assert verdict.ratios.non_permissible_income_ratio is None
