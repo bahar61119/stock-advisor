@@ -15,11 +15,16 @@ Pipeline (`run_portfolio_review`):
    candidacy outright, "regardless of halal status", so no technical signal
    or halal screen is computed for it -- it gets `candidate = None` and
    `reason = REASON_POOLED_FUND`.
-4. Otherwise use the instrument's `short_name` as the plain ticker to query
-   the market-data provider for price history, fundamentals, and company
-   profile. Compute a `TechnicalSignal` (Task 5) and a `HalalVerdict`
-   (Task 6), and derive `allowed_recommendations` via Task 8's
-   `compute_allowed_recommendations` (reused, not reimplemented).
+4. Otherwise translate the instrument into the market-data provider's symbol
+   format via `stock_advisor.analysis.universe.to_market_data_symbol` --
+   the same currency-guard reasoning Task 7's `match_broker_tradable` uses
+   in the opposite direction, so a held LSE stock's bare `short_name` (e.g.
+   "BA" for BAE Systems) is queried as "BA.L" rather than colliding with an
+   unrelated US ticker (plain "BA" is Boeing). Use that translated symbol to
+   query the market-data provider for price history, fundamentals, and
+   company profile. Compute a `TechnicalSignal` (Task 5) and a
+   `HalalVerdict` (Task 6), and derive `allowed_recommendations` via Task
+   8's `compute_allowed_recommendations` (reused, not reimplemented).
 5. A holding always appears in the output -- never silently dropped, never an
    exception. When it has no `candidate`, `HoldingResult.reason` says which
    of the four situations applies (see `HoldingResult`).
@@ -34,6 +39,7 @@ import os
 
 from stock_advisor.analysis.halal_screen import load_exclusions, screen
 from stock_advisor.analysis.technical import compute_technical_signal
+from stock_advisor.analysis.universe import to_market_data_symbol
 from stock_advisor.config import AppConfig, load_config
 from stock_advisor.providers.broker.base import (
     AccountSummary,
@@ -105,7 +111,7 @@ def _find_instrument_by_ticker(ticker: str, instruments: list[Instrument]) -> In
 
 
 def _build_candidate(
-    short_name: str,
+    market_symbol: str,
     broker_ticker: str,
     market_data: MarketDataProvider,
     config: AppConfig,
@@ -113,17 +119,30 @@ def _build_candidate(
 ) -> tuple[CandidateResult | None, str | None]:
     """Screen a single matched holding.
 
+    `market_symbol` must already be translated into the market-data
+    provider's symbol format (see `to_market_data_symbol`) -- this function
+    does no translation of its own, it just queries with whatever symbol it
+    is given.
+
     Returns `(candidate, None)` on success, or `(None, reason)` when the
-    market-data provider has no entry for `short_name` or its fetch raised.
-    Never propagates the provider's exception: one unlucky holding must not
-    cost the user the entire portfolio review, so the three provider calls
-    are isolated with a broad `except Exception` (the point is containing a
-    third-party backend's unpredictable failures, not enumerating them).
+    market-data provider has no entry for `market_symbol` or its fetch
+    raised. Never propagates the provider's exception: one unlucky holding
+    must not cost the user the entire portfolio review, so the three
+    provider calls are isolated with a broad `except Exception` (the point
+    is containing a third-party backend's unpredictable failures, not
+    enumerating them).
+
+    `CandidateResult.ticker` is set to `market_symbol` -- the symbol that
+    was actually queried -- rather than the broker's bare `short_name`, so
+    the report shows what was screened (consistent with `scan_market.py`,
+    where `CandidateResult.ticker` is likewise the symbol queried, and
+    `broker_ticker` separately carries the broker's own identifier for
+    anyone matching the report back to their account).
     """
     try:
-        price_history = market_data.get_price_history(short_name)
-        fundamentals = market_data.get_fundamentals(short_name)
-        profile = market_data.get_company_profile(short_name)
+        price_history = market_data.get_price_history(market_symbol)
+        fundamentals = market_data.get_fundamentals(market_symbol)
+        profile = market_data.get_company_profile(market_symbol)
     except KeyError:
         return None, REASON_NO_MARKET_DATA
     except Exception:
@@ -135,7 +154,7 @@ def _build_candidate(
 
     return (
         CandidateResult(
-            ticker=short_name,
+            ticker=market_symbol,
             broker_ticker=broker_ticker,
             technical=technical,
             halal=halal,
@@ -171,7 +190,7 @@ def run_portfolio_review(
             candidate, reason = None, REASON_POOLED_FUND
         else:
             candidate, reason = _build_candidate(
-                instrument.short_name,
+                to_market_data_symbol(instrument),
                 instrument.ticker,
                 market_data,
                 config,

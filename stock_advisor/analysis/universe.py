@@ -83,6 +83,34 @@ def _is_lse_currency(currency_code: str) -> bool:
     return currency_code.upper() in LSE_CURRENCY_CODES
 
 
+def to_market_data_symbol(instrument: Instrument) -> str:
+    """Translate a broker Instrument's bare short_name into the symbol
+    format the market-data provider (yfinance) expects — the reverse of
+    _lookup_keys's forward translation, using the same currency-guard
+    reasoning match_broker_tradable relies on.
+
+    A London listing (GBX/GBP currency) gets an explicit .L suffix
+    (idempotent if already present), with any internal share-class dot
+    converted to a hyphen first (so "BT.A" + GBX -> "BT-A.L", matching the
+    bundled universe file's own convention for BT Group). A non-London
+    short_name's internal dot (a share-class separator, e.g. "BRK.B") is
+    converted to yfinance's hyphenated form ("BRK-B").
+
+    This is what prevents a bare short_name like "BA" (BAE Systems, GBX)
+    from being queried as the unrelated US-listed Boeing: appending .L
+    guarantees a symbol that can only resolve to the London listing (or to
+    nothing at all, which surfaces visibly as a market-data gap) -- never
+    silently to a different real company's data, by the same reasoning
+    match_broker_tradable already uses for the opposite direction.
+    """
+    short_name = instrument.short_name
+    if not _is_lse_currency(instrument.currency_code):
+        return short_name.replace(".", "-")
+    if short_name.upper().endswith(LSE_SUFFIX):
+        return short_name
+    return short_name.replace(".", "-") + LSE_SUFFIX
+
+
 def _lookup_keys(ticker: str) -> list[tuple[str, bool]]:
     """Broker `short_name` spellings to try for one universe ticker, in
     priority order, each paired with whether the matched instrument must be a

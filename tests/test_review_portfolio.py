@@ -191,8 +191,11 @@ def test_matched_holding_has_market_data_but_no_entry_still_candidate_none():
 
 
 def test_matched_holding_produces_candidate_using_short_name_as_ticker():
-    """The candidate's ticker is the plain short_name used to query
+    """The candidate's ticker is the market-data symbol used to query
     market data, not the Trading212-format position/instrument ticker.
+    For a plain US instrument like AAPL, that symbol equals the bare
+    short_name unchanged -- see test_held_lse_stock_is_queried_with_the_
+    suffixed_market_data_symbol for a case where translation changes it.
     """
     broker = FakeBrokerProvider(
         accounts=make_account_summary(),
@@ -451,3 +454,63 @@ def test_review_does_no_file_io_of_its_own():
 def test_holding_result_reason_defaults_to_none():
     holding = HoldingResult(position=make_position(), candidate=None)
     assert holding.reason is None
+
+
+# --- Holdings-ticker fix: translate short_name before querying market data ---
+#
+# _build_candidate used to pass instrument.short_name straight to the
+# market-data provider with no translation. For a held LSE stock whose bare
+# short_name collides with a US ticker (e.g. "BA" is both BAE Systems' EPIC
+# and Boeing's NYSE ticker), that silently queried the wrong company. The
+# fake provider below is seeded ONLY under the ".L"-suffixed key, so getting
+# a real candidate back (not REASON_NO_MARKET_DATA) is only possible if the
+# correct, translated symbol was used to query it.
+
+
+def bae_systems_instrument() -> Instrument:
+    return Instrument(
+        ticker="BAl_EQ",
+        name="BAE Systems plc",
+        short_name="BA",
+        isin="GB0002634946",
+        currency_code="GBX",
+        type="STOCK",
+    )
+
+
+def test_held_lse_stock_is_queried_with_the_suffixed_market_data_symbol():
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position(ticker="BAl_EQ")],
+        instruments=[bae_systems_instrument()],
+    )
+    market_data = FakeMarketDataProvider(
+        prices={"BA.L": bullish_price_series()},
+        fundamentals={"BA.L": compliant_fundamentals()},
+        profiles={"BA.L": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    holding = output.holdings[0]
+    assert holding.candidate is not None
+    assert holding.reason is None
+    assert holding.candidate.ticker == "BA.L"
+    assert holding.candidate.broker_ticker == "BAl_EQ"
+
+
+def test_held_lse_stock_bare_short_name_is_not_queried_directly():
+    """The regression check: if the bare short_name ("BA") were still used
+    directly, the lookup would miss the suffixed-only fake provider and
+    report a coverage gap instead of a real candidate.
+    """
+    broker = FakeBrokerProvider(
+        accounts=make_account_summary(),
+        positions=[make_position(ticker="BAl_EQ")],
+        instruments=[bae_systems_instrument()],
+    )
+    market_data = FakeMarketDataProvider(
+        prices={"BA.L": bullish_price_series()},
+        fundamentals={"BA.L": compliant_fundamentals()},
+        profiles={"BA.L": clean_profile()},
+    )
+    output = run_portfolio_review(make_test_config(), broker, market_data, EXCLUSIONS)
+    assert output.holdings[0].reason != REASON_NO_MARKET_DATA

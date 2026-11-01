@@ -3,7 +3,11 @@ matching them against broker-tradable instruments.
 """
 import json
 
-from stock_advisor.analysis.universe import load_universe, match_broker_tradable
+from stock_advisor.analysis.universe import (
+    load_universe,
+    match_broker_tradable,
+    to_market_data_symbol,
+)
 from stock_advisor.providers.broker.base import Instrument
 
 
@@ -258,3 +262,55 @@ def test_etf_exclusion_still_applies_to_suffixed_tickers():
     result = match_broker_tradable(["ISF.L"], [etf])
     assert result.matched == []
     assert result.unmatched == ["ISF.L"]
+
+
+# --- to_market_data_symbol: the reverse translation (holdings-ticker fix) ---
+#
+# review_portfolio.py's _build_candidate queries the market-data provider
+# with a broker Instrument's bare short_name and no translation. For a held
+# LSE stock that silently queries the wrong company (e.g. "BA" resolves to
+# Boeing, not BAE Systems). to_market_data_symbol fixes that by reusing the
+# same currency-guard reasoning match_broker_tradable already applies in the
+# opposite direction.
+
+
+def test_to_market_data_symbol_leaves_a_plain_us_ticker_unchanged():
+    instrument = us_stock("AAPL")
+    assert to_market_data_symbol(instrument) == "AAPL"
+
+
+def test_to_market_data_symbol_converts_a_dotted_us_share_class_to_hyphen():
+    instrument = us_stock("BRK.B")
+    assert to_market_data_symbol(instrument) == "BRK-B"
+
+
+def test_to_market_data_symbol_appends_l_suffix_for_a_plain_lse_ticker():
+    instrument = lse_stock("BA")
+    assert to_market_data_symbol(instrument) == "BA.L"
+
+
+def test_to_market_data_symbol_converts_dot_and_appends_l_for_lse_share_class():
+    """BT Group's LSE EPIC is BT.A; yfinance wants BT-A.L -- the hyphen
+    conversion must happen before the .L suffix is appended, not after.
+    """
+    instrument = lse_stock("BT.A")
+    result = to_market_data_symbol(instrument)
+    assert result == "BT-A.L"
+    assert result != "BT.A.L"
+    assert result != "BT-A.l.L"
+
+
+def test_to_market_data_symbol_is_idempotent_when_already_suffixed():
+    instrument = lse_stock("BA.L")
+    assert to_market_data_symbol(instrument) == "BA.L"
+
+
+def test_to_market_data_symbol_currency_check_is_case_insensitive():
+    """Consistent with _is_lse_currency's own case-insensitive comparison."""
+    instrument = lse_stock("BA")
+    instrument.currency_code = "gbx"
+    assert to_market_data_symbol(instrument) == "BA.L"
+
+    instrument_gbp = lse_stock("SHEL")
+    instrument_gbp.currency_code = "Gbp"
+    assert to_market_data_symbol(instrument_gbp) == "SHEL.L"
