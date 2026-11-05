@@ -104,9 +104,11 @@ link, updated in place, rather than creating a new one each time. The
 template lives at `stock_advisor/reporting/dashboard_template.html`; its
 URL (once it exists) is recorded locally at `.state/dashboard_url.txt` via
 `stock_advisor/reporting/dashboard_state.py` so the next run knows to
-update that artifact instead of publishing a separate one. Neither file is
-committed — `.state/` is gitignored, since the URL is specific to your own
-published copy, not something to check into source control.
+update that artifact instead of publishing a separate one. The template
+and the state-reading code are committed like everything else; only the
+recorded URL itself isn't — `.state/` is gitignored, since that URL is
+specific to your own published copy, not something to check into source
+control.
 
 The dashboard itself has an "ask about this report" panel (an Artifact
 `sample`-capability chat box) that answers questions grounded in that

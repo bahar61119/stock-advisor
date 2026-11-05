@@ -218,9 +218,14 @@ later step easy, not force it.
   intersected with what Trading212 actually offers) — needs a small
   implementation-time decision on where that list comes from and how it's
   refreshed.
-- Report format and structure (Markdown report vs. Artifact dashboard vs.
-  both), and whether the scheduled routine's output is pushed to the user
-  (e.g. a notification) or simply left ready to view on demand.
+- ~~Report format and structure~~ — decided after Phase 1 shipped: a single
+  persistent Artifact dashboard (`stock_advisor/reporting/dashboard_template.html`),
+  updated in place on every run rather than a new link each time, with a
+  plain-Markdown fallback only if the Artifact tool is genuinely unavailable.
+  See `SKILL.md`'s "Step 4: Publish the dashboard" and `README.md`'s "The
+  dashboard" for the actual mechanism. The scheduled routine's output isn't
+  separately pushed (no notification) — the dashboard link stays the same
+  URL, so there's nothing new to push to.
 - Exact schedule trigger times (e.g. aligned to US/UK market hours) —
   "at least twice a day" and "a scheduled Claude Code agent routine" are
   both fixed; the exact times are the builder's call.

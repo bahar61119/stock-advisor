@@ -1,5 +1,6 @@
 <title>Halal Screen</title>
 <meta name="description" content="Your Trading212 ISA holdings and halal-screened market candidates, with an ask-about-this-report panel.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
   :root {
     --ink: #14181d;
@@ -371,6 +372,9 @@ const REPORT_DATA = {
   isExample: true,
   generatedAt: "2026-11-05T08:00:00Z",
   coverage: { universeSize: 618, shortlisted: 20, unmatched: 14, noMarketData: 3, failed: 2 },
+  // AAOIFI-style thresholds from config/config.yaml -- static across a run,
+  // shown alongside every ratio so a verdict is checkable, not just stated.
+  thresholds: { debt: 0.33, cash: 0.33, receivables: 0.33, income: 0.05 },
   holdings: [
     {
       ticker: "AAPL", brokerTicker: "AAPL_US_EQ", name: "Apple Inc.",
@@ -470,11 +474,18 @@ function oneOf(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback;
 }
 const STYLES = ["growth", "dividend", "value", "sector-bet"];
+// Exactly these two string tokens -- "6–12 months" / "1 year+" in SKILL.md's
+// own prose is the same horizon, written for a human; this is the machine
+// token for it. Keep them in sync if either side changes.
 const HORIZONS = ["6-12mo", "1yr+"];
 const STATUSES = ["compliant", "non_compliant", "insufficient_data"];
 const RECOMMENDATIONS = ["hold", "trim", "add_more", "avoid"];
 
 function fmtPct(v) { return v == null ? null : (v * 100).toFixed(1) + "%"; }
+function fmtRatioStat(label, value, threshold) {
+  const limit = threshold == null ? "" : ` (limit < ${fmtPct(threshold)})`;
+  return stat(label + limit, fmtPct(value));
+}
 function statPill(status) {
   if (status === "compliant") return '<span class="pill good">Compliant</span>';
   if (status === "non_compliant") return '<span class="pill bad">Non-compliant</span>';
@@ -491,7 +502,7 @@ function stat(label, val) {
   return `<div class="stat"><span class="lbl">${esc(label)}</span>${shown}</div>`;
 }
 
-function entryCard(e, kind) {
+function entryCard(e) {
   if (e.reason) {
     const label = REASON_LABELS[e.reason] || esc(e.reason);
     return `
@@ -504,11 +515,24 @@ function entryCard(e, kind) {
         <div class="card-body"><p class="unavail">${label}</p></div>
       </details>`;
   }
-  const h = e.halal, t = e.technical;
+  // Guarded, not assumed: a malformed entry (a missing `allowed` or
+  // `ratios`) degrades this one card to "not available" fields rather than
+  // throwing inside the .map() that builds every card on the page -- see
+  // the whole-page try/catch in render() for the same principle applied
+  // one level up.
+  const h = e.halal || {};
+  const t = e.technical || {};
+  const ratios = h.ratios || {};
+  const th = REPORT_DATA.thresholds || {};
+  const allowed = Array.isArray(e.allowed) ? e.allowed : [];
   const style = oneOf(e.style, STYLES, "other");
   const horizon = oneOf(e.horizon, HORIZONS, "other");
   const status = oneOf(h.status, STATUSES, "insufficient_data");
-  const recommendation = oneOf(e.recommendation, RECOMMENDATIONS, "hold");
+  // The class picks a safe, neutral style for an off-allowlist value, but
+  // the *displayed text* is the real (escaped) value, never silently
+  // swapped for a different recommendation someone didn't actually choose.
+  const recoClass = oneOf(e.recommendation, RECOMMENDATIONS, "hold");
+  const recoText = typeof e.recommendation === "string" ? e.recommendation.replace(/_/g, " ") : "unknown";
   return `
     <details class="card" data-style="${style}" data-horizon="${horizon}" data-status="${status}">
       <summary class="card-head">
@@ -526,27 +550,27 @@ function entryCard(e, kind) {
           ${stat("RSI (14d)", t.rsi14)}
           ${stat("MACD line / signal", t.macdLine != null ? `${t.macdLine} / ${t.macdSignal}` : null)}
           ${stat("Volume trend", t.volumeTrend)}
-          ${stat("Debt / market cap", fmtPct(h.ratios.debt))}
-          ${stat("Cash+interest / market cap", fmtPct(h.ratios.cash))}
-          ${stat("Receivables+cash / market cap", fmtPct(h.ratios.receivables))}
-          ${stat("Non-permissible income", fmtPct(h.ratios.income))}
+          ${fmtRatioStat("Debt / market cap", ratios.debt, th.debt)}
+          ${fmtRatioStat("Cash+interest / market cap", ratios.cash, th.cash)}
+          ${fmtRatioStat("Receivables+cash / market cap", ratios.receivables, th.receivables)}
+          ${fmtRatioStat("Non-permissible income", ratios.income, th.income)}
         </div>
         ${h.failedChecks && h.failedChecks.length ? `<p class="rationale"><strong>Failed:</strong> ${esc(h.failedChecks.join(", "))}</p>` : ""}
-        <p class="rationale">${esc(e.rationale)}</p>
+        <p class="rationale">${esc(e.rationale || "")}</p>
         ${(h.caveats || []).map(c => `<div class="caveat">${esc(c)}</div>`).join("")}
         <div class="reco-row">
-          <span class="reco ${recommendation}">${esc(recommendation.replace("_", " "))}</span>
-          <span style="color:var(--ink-soft)">of ${esc(e.allowed.join(" / "))}</span>
+          <span class="reco ${recoClass}">${esc(recoText)}</span>
+          <span style="color:var(--ink-soft)">of ${esc(allowed.join(" / ") || "no listed options")}</span>
         </div>
       </div>
     </details>`;
 }
 
-function render() {
+function renderUnsafe() {
   const d = REPORT_DATA;
   document.getElementById("generated-at").textContent = new Date(d.generatedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   document.getElementById("example-banner").hidden = !d.isExample;
-  const cov = d.coverage;
+  const cov = d.coverage || {};
   document.getElementById("coverage").innerHTML = `
     <span>Universe scanned: <b>${Number(cov.universeSize) || 0}</b></span>
     <span>Shortlisted: <b>${Number(cov.shortlisted) || 0}</b></span>
@@ -554,14 +578,16 @@ function render() {
     <span>No market data: <b>${Number(cov.noMarketData) || 0}</b></span>
     <span>Fetch failed: <b>${Number(cov.failed) || 0}</b></span>`;
 
-  document.getElementById("holdings-cards").innerHTML = d.holdings.map(h => entryCard(h, "holding")).join("");
-  document.getElementById("compliant-cards").innerHTML = d.candidatesCompliant.map(c => entryCard(c, "compliant")).join("") || '<p class="unavail">No compliant candidates in this run’s shortlist.</p>';
-  document.getElementById("flagged-cards").innerHTML = d.candidatesFlagged.map(c => entryCard(c, "flagged")).join("") || '<p class="unavail">No flagged candidates in this run’s shortlist.</p>';
+  const holdings = d.holdings || [];
+  const compliant = d.candidatesCompliant || [];
+  const flagged = d.candidatesFlagged || [];
+  document.getElementById("holdings-cards").innerHTML = holdings.map(entryCard).join("") || '<p class="unavail">No current holdings reported.</p>';
+  document.getElementById("compliant-cards").innerHTML = compliant.map(entryCard).join("") || '<p class="unavail">No compliant candidates in this run’s shortlist.</p>';
+  document.getElementById("flagged-cards").innerHTML = flagged.map(entryCard).join("") || '<p class="unavail">No flagged candidates in this run’s shortlist.</p>';
 
-  const styles = ["growth", "dividend", "value", "sector-bet"];
   const controls = document.getElementById("filter-controls");
   controls.innerHTML = ['<button class="chip-toggle" data-filter="all" aria-pressed="true">All styles</button>']
-    .concat(styles.map(s => `<button class="chip-toggle" data-filter="${s}" aria-pressed="false">${s}</button>`)).join("");
+    .concat(STYLES.map(s => `<button class="chip-toggle" data-filter="${s}" aria-pressed="false">${esc(s)}</button>`)).join("");
   controls.addEventListener("click", (ev) => {
     const btn = ev.target.closest(".chip-toggle");
     if (!btn) return;
@@ -572,6 +598,17 @@ function render() {
       card.hidden = !(f === "all" || card.dataset.style === f);
     });
   });
+}
+function render() {
+  try {
+    renderUnsafe();
+  } catch (err) {
+    // A malformed REPORT_DATA must never leave the page silently half-blank
+    // (the concrete failure mode a prior review caught) -- say so visibly
+    // instead, with enough detail to fix it, rather than failing quietly.
+    document.querySelector(".wrap").insertAdjacentHTML("afterbegin",
+      `<p class="unavail" style="font-size:1rem">⚠ This report's data couldn't be rendered (${esc(String(err && err.message || err))}). The page did not finish loading correctly.</p>`);
+  }
 }
 render();
 
@@ -593,10 +630,27 @@ render();
     log.scrollTop = log.scrollHeight;
   }
 
+  // Codes the contract treats as a durable "this feature isn't available
+  // here" rather than a one-off failure -- disable the form rather than
+  // inviting a retry that cannot succeed (a prior review caught the terminal
+  // codes falling through to generic "try again" copy, which does invite one).
+  const TERMINAL_CODES = new Set([
+    "not_granted", "sampling_disabled", "not_declared",
+    "capability_disabled", "capability_removed", "session_expired",
+  ]);
+  function disablePermanently(message) {
+    addMsg("claude", message);
+    input.disabled = true;
+    send.disabled = true;
+  }
+
   toggle.addEventListener("click", () => { panel.hidden = false; toggle.hidden = true; input.focus(); });
   closeBtn.addEventListener("click", () => { panel.hidden = true; toggle.hidden = false; });
 
   let sample = null;
+  input.disabled = true;
+  send.disabled = true;
+  input.placeholder = "Connecting…";
   (async () => {
     try {
       sample = await window.claude?.use?.("sample");
@@ -604,9 +658,11 @@ render();
       sample = null;
     }
     if (!sample) {
-      addMsg("claude", "This report's live Q&A isn't available in this viewer right now. Reopen it from Claude, or ask your question there instead.");
-      input.disabled = true;
-      send.disabled = true;
+      disablePermanently("This report's live Q&A isn't available in this viewer right now. Reopen it from Claude, or ask your question there instead.");
+    } else {
+      input.disabled = false;
+      send.disabled = false;
+      input.placeholder = "e.g. Why is JPM flagged?";
     }
   })();
 
@@ -624,28 +680,32 @@ render();
     log.scrollTop = log.scrollHeight;
 
     const context = JSON.stringify(REPORT_DATA);
+    const exampleNote = REPORT_DATA.isExample
+      ? "This report is EXAMPLE data, not the viewer's real portfolio -- say so if asked about it as if it were real. "
+      : "";
     const prompt = `You are answering a question about a stock-advisor report the viewer is currently looking at. ` +
-      `Ground every answer ONLY in the JSON data below -- do not invent prices, news, or data not present in it, ` +
-      `and do not suggest placing a trade (this tool is read-only/advisory, and any trade decision is the viewer's ` +
-      `own, made manually in their broker's app). If the data needed to answer isn't in this JSON, say so plainly ` +
-      `rather than guessing. Keep the answer to a few sentences.\n\nReport JSON:\n${context}\n\nQuestion: ${q}`;
+      `${exampleNote}Ground every answer ONLY in the JSON data below -- do not invent prices, news, or data not ` +
+      `present in it, and do not suggest placing a trade (this tool is read-only/advisory, and any trade decision ` +
+      `is the viewer's own, made manually in their broker's app). If the data needed to answer isn't in this JSON, ` +
+      `say so plainly rather than guessing. Keep the answer to a few sentences.\n\nReport JSON:\n${context}\n\nQuestion: ${q}`;
 
     try {
       const res = await sample(prompt, {
         onText: ({ text }) => { thinking.textContent = text; log.scrollTop = log.scrollHeight; }
       });
-      thinking.textContent = res.text;
+      thinking.textContent = res.text + (res.truncated ? " [response truncated]" : "");
     } catch (err) {
       const code = err && err.code;
-      if (code === "not_granted") {
-        thinking.textContent = "Q&A isn't permitted for this viewer.";
+      if (TERMINAL_CODES.has(code)) {
+        thinking.remove();
+        disablePermanently("Q&A isn't available for this viewer.");
       } else if (code === "rate_limited") {
         thinking.textContent = "Rate limited -- try again in a moment.";
       } else {
         thinking.textContent = "Couldn't get an answer just now -- try again.";
       }
     } finally {
-      send.disabled = false;
+      if (!input.disabled) send.disabled = false;
       log.scrollTop = log.scrollHeight;
     }
   });

@@ -89,11 +89,31 @@ The report's home is a single, persistent Artifact — the user explicitly wants
 
 1. **Read `stock_advisor/reporting/dashboard_template.html`** as your starting point — it already has the full page (styles, layout, the "ask about this report" panel wired to the Artifact `sample` capability) and a `const REPORT_DATA = {...}` object near the top of its `<script>` block populated with clearly-marked example data.
 
-2. **Replace that one object wholesale** with the real data from this run: `isExample: false`, `generatedAt` as the current timestamp, `coverage` from `scan_market`'s `unmatched_count`/`no_market_data_tickers`/`failed_tickers` counts plus universe/shortlist sizes, `holdings` from `review_portfolio`'s `holdings` (each holding's `reason`-only entries keep the `{ ticker, brokerTicker, name, reason }` shape — no `technical`/`halal`/`recommendation` fields when `candidate` is `null`), and `candidatesCompliant` / `candidatesFlagged` as the two halal-split groups from `scan_market`'s `shortlist` (Step 3's rule 3) — each entry carrying the technical/halal/recommendation fields plus the style/horizon tag and rationale from Step 2. Don't touch the file's CSS, JS logic, or structure outside that one data object — it's already built and reviewed; your job each run is the data, not the page.
+2. **Replace that one object wholesale** with the real data from this run: `isExample: false`, `generatedAt` as the current timestamp.
+
+   **Field mapping — the pipeline's field names are not the dashboard's.** The JSON from Step 1 is Python snake_case; the dashboard reads camelCase, and a few names changed outright. A straight pass-through produces a page where every value quietly reads "not available" instead of erroring — map every field explicitly, exactly as below, don't guess at the rest:
+
+   | Dashboard field | Comes from |
+   |---|---|
+   | `coverage.universeSize` | `len(scan_market's all_results)` |
+   | `coverage.shortlisted` | `len(scan_market's shortlist)` |
+   | `coverage.unmatched` | `scan_market's unmatched_count` |
+   | `coverage.noMarketData` | `len(scan_market's no_market_data_tickers)` |
+   | `coverage.failed` | `len(scan_market's failed_tickers)` |
+   | `thresholds.{debt,cash,receivables,income}` | `config/config.yaml`'s `halal_thresholds.{debt_to_market_cap, cash_and_interest_to_market_cap, receivables_and_cash_to_market_cap, non_permissible_income_ratio}` — static, set once, not per-entry |
+   | per-entry `technical.{sma50,sma200,rsi14,macdLine,macdSignal,volumeTrend,verdict}` | `TechnicalSignal.{sma_50,sma_200,rsi_14,macd_line,macd_signal_line,volume_trend,verdict}` |
+   | per-entry `halal.status` / `halal.failedChecks` / `halal.caveats` | `HalalVerdict.status` / `.failed_checks` / `.caveats` |
+   | per-entry `halal.ratios.{debt,cash,receivables,income}` | `HalalRatios.{debt_to_market_cap, cash_and_interest_to_market_cap, receivables_and_cash_to_market_cap, non_permissible_income_ratio}` |
+   | per-entry `allowed` | `allowed_recommendations` (don't drop this — a missing `allowed` array is the one thing that can blank the whole page, not just this entry) |
+   | per-entry `style` | Step 2's tag, exactly one of `growth` / `dividend` / `value` / `sector-bet` |
+   | per-entry `horizon` | Step 2's tag, as exactly one of these two tokens: `6-12mo` for "6–12 months", `1yr+` for "1 year+" — not the human-readable phrase |
+   | per-entry `rationale` / `recommendation` | Step 2's own output |
+
+   `holdings` comes from `review_portfolio`'s `holdings`; each `reason`-only entry (no `candidate`) is `{ ticker: position.ticker, brokerTicker: position.ticker, name: position.name, reason: <the HoldingResult.reason string, unchanged> }` — no `technical`/`halal`/`recommendation`/`allowed` fields at all when `candidate` is `null`. `candidatesCompliant` / `candidatesFlagged` are the two halal-split groups from `scan_market`'s `shortlist` (Step 3's rule 3), each entry built from the mapping table above. Don't touch the file's CSS, JS logic, or structure outside the data object — it's already built and reviewed; your job each run is the data, not the page.
 
 3. **Check `stock_advisor.reporting.dashboard_state.read_dashboard_url()`** (run `python -c "from stock_advisor.reporting.dashboard_state import read_dashboard_url; print(read_dashboard_url())"` or equivalent):
-   - A URL already recorded → publish the edited file to that `url`, which updates the existing artifact in place. Omit `favicon`/`icon` so they're kept from the first publish.
-   - `None` (first run ever) → publish fresh with no `url`, `title: "Halal Screen"`, a one-sentence `description`, `favicon: "📊"`, `icon: "chart"`, and `capabilities: {"sample": {}}` (required every publish — it's the ask-about-this-report panel's permission, and omitting it clears it). Then call `write_dashboard_url()` with the URL the publish call returns, so every later run updates this same artifact.
+   - A URL already recorded → **read that artifact first** (the publish tool refuses a publish to a URL this conversation hasn't read or published — every scheduled run is a fresh conversation, so this step is not optional just because you already know the URL), then publish the edited file to that `url`, which updates it in place. Omit `capabilities` so the existing `sample` grant carries forward unchanged (per the Artifact tool: omitting the field on a redeploy keeps what the page already has — passing `{}` would clear it, and restating `{"sample": {}}` would also work but isn't needed). Likewise omit `favicon`/`icon` so they're kept.
+   - `None` (first run ever) → publish fresh with no `url`, `title: "Halal Screen"`, a one-sentence `description`, `favicon: "📊"`, `icon: "chart"`, and `capabilities: {"sample": {}}` (required on this first publish — a capability has to be declared before it can be omitted-to-keep on a later one). Then call `write_dashboard_url()` with the URL this publish call returns, so every later run updates this same artifact instead of repeating this branch.
 
 4. **Reply in chat with a short summary, not the full report** — a few lines covering headline counts (holdings reviewed, candidates compliant/flagged, any coverage caveats from Step 1) and the dashboard's link. The dashboard is where the detail lives; don't duplicate it all in the chat reply.
 
