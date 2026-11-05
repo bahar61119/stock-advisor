@@ -145,15 +145,15 @@ Valid broker names: `{"trading212"}`. Valid market-data names: `{"yfinance"}` (s
 Run: `pytest tests/test_config.py -v`
 Expected: PASS
 
-- [ ] **Step 6: Write `requirements.txt`, `.gitignore`, `.env.example`**
+- [ ] **Step 6: Write `requirements.txt`, `.env.example`, and extend the existing `.gitignore`**
 
-`requirements.txt`: `requests`, `pyyaml`, `yfinance`, `pandas`, `numpy`, and dev extras `pytest`, `requests-mock`. `.gitignore` excludes `.env`, `.cache/`, `__pycache__/`, `*.pyc`. `.env.example` documents `T212_API_KEY`, `T212_API_SECRET`, `T212_ENV` (and the `_STOCKS_ISA` suffixed alternative) with placeholder values and comments, matching the trading212-api skill's convention.
+`requirements.txt`: `requests`, `pyyaml`, `yfinance`, `pandas`, `numpy`, and dev extras `pytest`, `requests-mock`. The repo root already has a `.gitignore` (containing `.worktrees/`) — append to it rather than overwrite: add `.env`, `.cache/`, `__pycache__/`, `*.pyc`. `.env.example` documents `T212_API_KEY`, `T212_API_SECRET`, `T212_ENV` (and the `_STOCKS_ISA` suffixed alternative) with placeholder values and comments, matching the trading212-api skill's convention.
 
-- [ ] **Step 7: Init git repo and commit**
+- [ ] **Step 7: Commit**
+
+The git repo and this task's working branch already exist — do not run `git init`.
 
 ```bash
-cd /Users/bahar/workspace/stock-advisor
-git init
 git add -A
 git commit -m "chore: scaffold project and config system"
 ```
@@ -414,10 +414,16 @@ def test_rsi_all_gains_is_100():
     assert compute_rsi(series.close, window=14) == pytest.approx(100.0)
 
 def test_macd_known_values():
-    # closes chosen so EMA12/EMA26 are hand-verifiable
-    series = make_price_series(closes=KNOWN_MACD_FIXTURE)
-    line, signal = compute_macd(series.close, fast=12, slow=26, signal=9)
-    assert line == pytest.approx(EXPECTED_MACD_LINE, abs=0.01)
+    # Linear price series + small fast/slow/signal windows (not the 50/200/12-26-9
+    # production defaults — this test is of the generic compute_macd function,
+    # same as test_sma_matches_hand_computed_average uses window=5, not 50/200).
+    # Hand-verified: with closes rising by 1 each step, EMA(fast=2) - EMA(slow=4)
+    # stabilizes at exactly 1.0 from the first point both EMAs are defined, and
+    # the signal line (an EMA of a constant 1.0 series) is also exactly 1.0.
+    series = make_price_series(closes=[10, 11, 12, 13, 14, 15, 16])
+    line, signal = compute_macd(series.close, fast=2, slow=4, signal=2)
+    assert line == pytest.approx(1.0, abs=0.001)
+    assert signal == pytest.approx(1.0, abs=0.001)
 
 def test_volume_trend_rising_when_recent_higher():
     volumes = [100] * 20 + [300] * 20
@@ -447,6 +453,8 @@ Run: `pytest tests/test_technical.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `technical.py`**
+
+`compute_macd`'s EMA seeding (fixes the `test_macd_known_values` result, which depends on this): the first EMA value for each span is the simple average of that span's first `window` prices (not the first price alone); every subsequent value is the standard recursive EMA update `price * k + prev_ema * (1-k)` with `k = 2/(window+1)`. The signal line is the same EMA recursion applied to the series of MACD-line values, seeded the same way once `signal` MACD-line values exist.
 
 `classify_verdict` approach (fixed by this plan, since the signature doesn't determine it): count bullish points — `sma_50 > sma_200`, `macd_line > macd_signal_line`, `30 < rsi_14 < 70`, `volume_trend == "rising"` — and bearish points — the mirror conditions (`sma_50 < sma_200`, `macd_line < macd_signal_line`, `rsi_14 >= 70 or rsi_14 <= 30`, `volume_trend == "falling"`), each skipped if its inputs are `None`. Verdict is `"bullish"` if bullish points `>= 3`, `"bearish"` if bearish points `>= 3`, else `"neutral"`.
 
@@ -707,7 +715,7 @@ Expected: FAIL
 
 - [ ] **Step 3: Implement `review_portfolio.py`**
 
-For each `Position`, resolve its plain ticker via the matching `Instrument.short_name` (reverse of Task 7's match direction — same case-insensitive comparison); if no `Instrument` matches the position's `ticker`, or the matched short name has no entry in the market-data provider, set `candidate = None` rather than raising or skipping the holding. Reuse Task 8's `allowed_recommendations` function (import it; do not reimplement the rule) when `candidate` is built.
+For each `Position`, find the `Instrument` whose `ticker` field exactly equals the position's `ticker` (both are Trading212-format identifiers, e.g. `AAPL_US_EQ` — this is a direct ticker-to-ticker match, distinct from Task 7's plain-ticker-to-`short_name` match). If found, use that instrument's `short_name` as the plain ticker for the market-data lookup. If no `Instrument` matches, or the matched `short_name` has no entry in the market-data provider, set `candidate = None` rather than raising or skipping the holding. Reuse Task 8's `allowed_recommendations` function (import it; do not reimplement the rule) when `candidate` is built.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
