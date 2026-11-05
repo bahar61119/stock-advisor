@@ -5,7 +5,9 @@ market for long-term stock candidates (growth, dividend, value, sector
 bets), screening every result for halal/Shariah compliance and tagging it
 with a transparent technical signal and a time horizon. Claude layers its
 own qualitative research (news, fundamentals, company context) on top of
-the rules-based numbers before writing a Markdown report.
+the rules-based numbers before publishing it all to a single, persistent
+interactive dashboard — one stable link that updates in place every run,
+with its own "ask about this report" panel.
 
 ## What this is — and is not
 
@@ -94,6 +96,24 @@ Trading212 environment variables exported — `python -m scripts.scan_market`
 root on `sys.path` so `import stock_advisor` resolves). Neither script
 takes command-line flags; they read `config/config.yaml` and the
 environment, and print one JSON document to stdout.
+
+## The dashboard
+
+Every run — on-demand or scheduled — publishes to the **same** Artifact
+link, updated in place, rather than creating a new one each time. The
+template lives at `stock_advisor/reporting/dashboard_template.html`; its
+URL (once it exists) is recorded locally at `.state/dashboard_url.txt` via
+`stock_advisor/reporting/dashboard_state.py` so the next run knows to
+update that artifact instead of publishing a separate one. Neither file is
+committed — `.state/` is gitignored, since the URL is specific to your own
+published copy, not something to check into source control.
+
+The dashboard itself has an "ask about this report" panel (an Artifact
+`sample`-capability chat box) that answers questions grounded in that
+run's data — "why is X flagged," "compare these two," that kind of thing.
+It can't trigger a new scan or touch your real account; that still goes
+through Claude in a normal conversation, since only that has the
+credentials and tool access the dashboard's browser-side panel doesn't.
 
 ## Scheduling the twice-daily run
 

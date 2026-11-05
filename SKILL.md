@@ -1,6 +1,6 @@
 ---
 name: stock-advisor
-description: "Review a Trading212 Stocks ISA and/or scan the market for new long-term stock candidates (growth, dividend, value, sector bets), screened for Shariah/halal compliance and tagged with a technical signal and a time horizon, then written up in a Markdown report with Claude's own qualitative research layered on top. Use when the user asks things like \"check my ISA\", \"review my portfolio\", \"suggest stocks\", \"find me stock ideas\", or \"scan the market for candidates\", and on scheduled twice-daily runs set up via the `schedule` skill. Read-only, advisory-only: this skill never places, modifies, or cancels a Trading212 order, under any framing, in any phase of this project."
+description: "Review a Trading212 Stocks ISA and/or scan the market for new long-term stock candidates (growth, dividend, value, sector bets), screened for Shariah/halal compliance and tagged with a technical signal and a time horizon, then published to a persistent interactive dashboard (one stable link, updated in place every run) with Claude's own qualitative research layered on top. Use when the user asks things like \"check my ISA\", \"review my portfolio\", \"suggest stocks\", \"find me stock ideas\", or \"scan the market for candidates\", and on scheduled twice-daily runs set up via the `schedule` skill. Read-only, advisory-only: this skill never places, modifies, or cancels a Trading212 order, under any framing, in any phase of this project."
 ---
 
 ## What this skill is, and is not
@@ -69,31 +69,36 @@ For every entry in `review_portfolio`'s `holdings` with a non-null `candidate`, 
 
 A holding whose `candidate` is `null` gets no research pass — there's nothing to research against. State plainly in the report that technical/halal data is unavailable for it.
 
-## Step 3: Assemble the report
+## Step 3: Assemble the report content
 
-Write one Markdown report with this structure:
+Whether it ends up on the dashboard (Step 4, the normal path) or in a plain Markdown reply (the fallback), the same content rules apply:
 
-1. **Title and disclaimer, at the very top, every time** — verbatim or near-verbatim:
+1. **Disclaimer, always** — verbatim or near-verbatim: "This report is produced by a best-effort automated tool. It is not financial advice and there is no guarantee of any investment return, past, present, or future. The halal/Shariah compliance screen is an automated heuristic — sector keyword matching plus AAOIFI-style financial ratio thresholds computed from available data — and is **not a scholarly ruling**. It is provided so you can see the underlying numbers and apply your own or a qualified scholar's judgment, not as a substitute for one." (The dashboard template already renders this; a Markdown fallback must include it itself.)
 
-   > **Disclaimer:** This report is produced by a best-effort automated tool. It is not financial advice and there is no guarantee of any investment return, past, present, or future. The halal/Shariah compliance screen is an automated heuristic — sector keyword matching plus AAOIFI-style financial ratio thresholds computed from available data — and is **not a scholarly ruling**. It is provided so you can see the underlying numbers and apply your own or a qualified scholar's judgment, not as a substitute for one.
+2. **Your ISA Holdings** — one entry per item in `review_portfolio`'s `holdings`, in the order returned. For each: ticker and company name (from `position`; see "No sizing" below for what *not* to include), then halal verdict status plus every ratio (not just the verdict), technical signal values and verdict, investment style and time horizon tags, qualitative rationale, and a recommendation chosen from `allowed_recommendations` — or, if `candidate` is `null`, the `reason`-specific wording from Step 1 instead of any of that.
 
-2. **Your ISA Holdings** — one entry per item in `review_portfolio`'s `holdings`, in the order returned. For each: ticker and company name (from `position`; see "No sizing" below for what *not* to include), then:
-   - halal verdict status plus every ratio (not just the verdict) and threshold, or "technical/halal data unavailable for this ticker" if `candidate` is `null`
-   - technical signal values and verdict
-   - investment style and time horizon tags
-   - qualitative rationale
-   - recommendation, chosen from `allowed_recommendations`
+3. **New Candidates** — built from `scan_market`'s `shortlist`, split into exactly two groups, **both always present even if one is empty**: **Halal-Compliant** (`halal.status == "compliant"`) and **Non-Compliant / Flagged** (`non_compliant` or `insufficient_data`). Never blend them into one unlabeled bucket, and never drop entries just because they're not buy-worthy — showing both groups, clearly labeled, is the whole point of the screen. Each candidate gets the same fields as a holding (minus anything sizing-related).
 
-3. **New Candidates** — built from `scan_market`'s `shortlist`, split into exactly two labeled subsections, **both always present even if one is empty**:
-   - **Halal-Compliant** — entries with `halal.status == "compliant"`.
-   - **Non-Compliant / Flagged** — entries with `halal.status` of `non_compliant` or `insufficient_data`. Label each entry with which of the two it is; never blend them into a single unlabeled bucket, and never omit this subsection or silently drop its entries just because they're not buy-worthy by the halal screen. Showing both groups, clearly labeled, is the whole point of the screen.
+4. **No sizing, anywhere.** Never include a dollar amount, share count, position size, account value, cash balance, or P&L figure — not for holdings, not for candidates, not in any summary, and not in the qualitative rationale either (e.g. "missed consensus on revenue and EPS," not the actual dollar figures). `account_summary` and each `position`'s `quantity`/`current_price`/`average_price_paid`/`wallet_*` fields exist for your own context while assembling the report but must never appear in the report text itself. Recommendations are exactly one of `hold`, `trim`, `add_more`, `avoid` — directional only. Relative percentages ("35% revenue growth") are fine as research context; they're not sizing figures.
 
-   Each candidate entry gets the same fields as a holding entry above (minus anything sizing-related, since candidates never had a position to begin with).
+5. **Never silently drop a result.** Every holding and every shortlisted candidate appears somewhere, clearly labeled. Tickers in `all_results` that didn't make the `shortlist` don't need individual mention (cost control, Step 1) — the report is about the shortlist and the holdings, not the full scan.
 
-4. **No sizing, anywhere in the report.** Never include a dollar amount, share count, position size, account value, cash balance, or P&L figure — not for holdings, not for candidates, not in any summary, and not in the qualitative rationale either (e.g. describe an earnings miss as "missed consensus on revenue and EPS," not with the actual dollar figures). `review_portfolio`'s `account_summary` and each `position`'s `quantity`/`current_price`/`average_price_paid`/`wallet_*` fields exist for your own context while assembling the report (e.g. to know what's actually held) but must never appear in the report text itself. Recommendations are exactly one of `hold`, `trim`, `add_more`, `avoid` — directional only, never a quantity or a target allocation. Percentages that describe relative performance or growth (e.g. "35% revenue growth," "up 6% year-over-year") are not sizing figures and are fine to include as research context.
+## Step 4: Publish the dashboard
 
-5. **Never silently drop a result.** Every holding (matched or not) and every shortlisted candidate (compliant or not) appears somewhere in the report, clearly labeled. If `scan_market`'s `all_results` contains tickers that didn't make the `shortlist`, that's expected (cost control, see Step 1) and doesn't need individual mention — the report is about the shortlist and the holdings, not the full scan.
+The report's home is a single, persistent Artifact — the user explicitly wants one stable link that updates in place on every run (on-demand or scheduled), not a fresh link each time, since they intend to treat it like a small web app.
+
+1. **Read `stock_advisor/reporting/dashboard_template.html`** as your starting point — it already has the full page (styles, layout, the "ask about this report" panel wired to the Artifact `sample` capability) and a `const REPORT_DATA = {...}` object near the top of its `<script>` block populated with clearly-marked example data.
+
+2. **Replace that one object wholesale** with the real data from this run: `isExample: false`, `generatedAt` as the current timestamp, `coverage` from `scan_market`'s `unmatched_count`/`no_market_data_tickers`/`failed_tickers` counts plus universe/shortlist sizes, `holdings` from `review_portfolio`'s `holdings` (each holding's `reason`-only entries keep the `{ ticker, brokerTicker, name, reason }` shape — no `technical`/`halal`/`recommendation` fields when `candidate` is `null`), and `candidatesCompliant` / `candidatesFlagged` as the two halal-split groups from `scan_market`'s `shortlist` (Step 3's rule 3) — each entry carrying the technical/halal/recommendation fields plus the style/horizon tag and rationale from Step 2. Don't touch the file's CSS, JS logic, or structure outside that one data object — it's already built and reviewed; your job each run is the data, not the page.
+
+3. **Check `stock_advisor.reporting.dashboard_state.read_dashboard_url()`** (run `python -c "from stock_advisor.reporting.dashboard_state import read_dashboard_url; print(read_dashboard_url())"` or equivalent):
+   - A URL already recorded → publish the edited file to that `url`, which updates the existing artifact in place. Omit `favicon`/`icon` so they're kept from the first publish.
+   - `None` (first run ever) → publish fresh with no `url`, `title: "Halal Screen"`, a one-sentence `description`, `favicon: "📊"`, `icon: "chart"`, and `capabilities: {"sample": {}}` (required every publish — it's the ask-about-this-report panel's permission, and omitting it clears it). Then call `write_dashboard_url()` with the URL the publish call returns, so every later run updates this same artifact.
+
+4. **Reply in chat with a short summary, not the full report** — a few lines covering headline counts (holdings reviewed, candidates compliant/flagged, any coverage caveats from Step 1) and the dashboard's link. The dashboard is where the detail lives; don't duplicate it all in the chat reply.
+
+**Fallback:** if the Artifact tool genuinely isn't available in whatever context is running this skill, fall back to a plain Markdown reply following Step 3's content rules directly in chat, and say that's what you're doing and why.
 
 ## Delivery
 
-Both on-demand ("check my ISA and suggest buys") and scheduled runs follow exactly the steps above — a scheduled run is a normal session woken by the `schedule` skill's cron routine with the same tool access (including web search/fetch), not a bare script on a timer. Set up the schedule yourself with the `schedule` skill if the user asks for the twice-daily routine; exact times are the user's call (see README.md).
+Both on-demand ("check my ISA and suggest buys") and scheduled runs follow exactly the steps above — a scheduled run is a normal session woken by the `schedule` skill's cron routine with the same tool access (including web search/fetch and the Artifact tool), not a bare script on a timer. Set up the schedule yourself with the `schedule` skill if the user asks for the twice-daily routine; exact times are the user's call (see README.md). Either way, the dashboard link stays the same run to run — that's the point of Step 4's URL persistence.

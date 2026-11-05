@@ -1,0 +1,626 @@
+<title>Halal Screen</title>
+<meta name="description" content="Your Trading212 ISA holdings and halal-screened market candidates, with an ask-about-this-report panel.">
+<style>
+  :root {
+    --ink: #14181d;
+    --ink-soft: #3a4047;
+    --paper: #f1f3f2;
+    --paper-raised: #ffffff;
+    --line: #d9dcda;
+    --accent: #2f6f6b;
+    --accent-soft: #e4efed;
+    --gold: #b98b2e;
+    --gold-soft: #f3e8d2;
+    --good: #3c8c63;
+    --good-soft: #e3f1e9;
+    --bad: #b5473f;
+    --bad-soft: #f8e6e4;
+    --muted: #8c8577;
+    --muted-soft: #efece4;
+    --shadow: 0 1px 2px rgba(20, 24, 29, 0.06), 0 8px 24px -12px rgba(20, 24, 29, 0.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #eceeec;
+      --ink-soft: #b7bdc4;
+      --paper: #14181d;
+      --paper-raised: #1c2128;
+      --line: #2c333b;
+      --accent: #6cc2bb;
+      --accent-soft: #1d2f2e;
+      --gold: #e0ad53;
+      --gold-soft: #332813;
+      --good: #6fbf93;
+      --good-soft: #17281f;
+      --bad: #e08077;
+      --bad-soft: #2f1c1a;
+      --muted: #a69f8e;
+      --muted-soft: #23201a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #eceeec;
+    --ink-soft: #b7bdc4;
+    --paper: #14181d;
+    --paper-raised: #1c2128;
+    --line: #2c333b;
+    --accent: #6cc2bb;
+    --accent-soft: #1d2f2e;
+    --gold: #e0ad53;
+    --gold-soft: #332813;
+    --good: #6fbf93;
+    --good-soft: #17281f;
+    --bad: #e08077;
+    --bad-soft: #2f1c1a;
+    --muted: #a69f8e;
+    --muted-soft: #23201a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    padding: 0 16px;
+    padding-block: 0;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1, h2, h3 { font-family: "Fraunces", Georgia, serif; text-wrap: balance; margin: 0; }
+  .ticker { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  table, .figs { font-variant-numeric: tabular-nums; }
+
+  header.top {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    background: var(--paper);
+    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+    z-index: 5;
+  }
+  header.top .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  header.top h1 { font-size: clamp(1.5rem, 4vw, 2rem); font-weight: 600; }
+  .meta { color: var(--ink-soft); font-size: 0.85rem; }
+
+  .banner {
+    margin-top: 12px;
+    background: var(--gold-soft);
+    border: 1px solid var(--gold);
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+  }
+  .banner strong { color: var(--gold); font-family: "IBM Plex Mono", monospace; }
+
+  details.disclaimer {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+  }
+  details.disclaimer summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+  details.disclaimer p { margin: 8px 0 0; line-height: 1.5; }
+
+  .coverage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+  }
+  .coverage b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  section { margin-top: 36px; }
+  section > h2 { font-size: 1.4rem; margin-bottom: 4px; }
+  section > .sub { color: var(--ink-soft); font-size: 0.9rem; margin-bottom: 16px; }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .chip-toggle {
+    border: 1px solid var(--line);
+    background: var(--paper-raised);
+    color: var(--ink-soft);
+    border-radius: 999px;
+    padding: 5px 13px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .chip-toggle[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 720px) { .columns { grid-template-columns: 1fr; } }
+  .col-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--line);
+  }
+  .col-head.good { color: var(--good); border-color: var(--good); }
+  .col-head.bad { color: var(--bad); border-color: var(--bad); }
+
+  .cards { display: flex; flex-direction: column; gap: 10px; }
+
+  .card {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    width: 100%;
+    background: none;
+    border: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+  }
+  .card-head .id { flex: 1; min-width: 0; }
+  .card-head .id .name { font-size: 0.78rem; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-head .tkr { font-size: 1.05rem; font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .pill {
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .pill.good { background: var(--good-soft); color: var(--good); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .pill.muted { background: var(--muted-soft); color: var(--muted); }
+  .pill.outline { background: transparent; border: 1px solid var(--line); color: var(--ink-soft); }
+  .caret { color: var(--ink-soft); transition: transform 0.15s ease; flex-shrink: 0; }
+  .card[open] .caret { transform: rotate(90deg); }
+
+  .card-body { padding: 0 14px 16px; border-top: 1px solid var(--line); }
+  .card-body .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px 20px;
+    margin: 14px 0;
+  }
+  .stat { font-size: 0.8rem; }
+  .stat .lbl { color: var(--ink-soft); display: block; }
+  .stat .val { font-size: 0.95rem; font-weight: 600; }
+  .stat .val.na { color: var(--muted); font-weight: 400; }
+
+  .rationale { font-size: 0.88rem; line-height: 1.55; color: var(--ink-soft); margin: 10px 0; }
+  .caveat {
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    background: var(--muted-soft);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 8px;
+  }
+  .reco-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 0.85rem; }
+  .reco-row .reco { font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.78rem; padding: 3px 10px; border-radius: 6px; }
+  .reco.add_more, .reco.hold { background: var(--good-soft); color: var(--good); }
+  .reco.trim { background: var(--gold-soft); color: var(--gold); }
+  .reco.avoid { background: var(--bad-soft); color: var(--bad); }
+
+  .unavail { font-size: 0.85rem; color: var(--muted); font-style: italic; }
+
+  /* details element used for cards: hide default marker */
+  details.card > summary { list-style: none; }
+  details.card > summary::-webkit-details-marker { display: none; }
+
+  .ask-btn {
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    background: var(--accent);
+    color: var(--paper-raised);
+    border: none;
+    border-radius: 999px;
+    padding: 12px 18px;
+    font: inherit;
+    font-weight: 600;
+    font-size: 0.88rem;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    z-index: 10;
+  }
+  .ask-panel {
+    position: fixed;
+    inset: auto 16px calc(72px + env(safe-area-inset-bottom, 0px)) 16px;
+    max-width: 480px;
+    margin-inline: auto;
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    max-height: 60vh;
+  }
+  .ask-panel .ask-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .ask-panel .ask-head button { background: none; border: none; color: var(--ink-soft); font: inherit; cursor: pointer; }
+  .ask-log { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .ask-msg { font-size: 0.85rem; line-height: 1.5; }
+  .ask-msg.you { color: var(--ink-soft); }
+  .ask-msg.you::before { content: "You: "; font-weight: 600; color: var(--ink); }
+  .ask-msg.claude::before { content: "Claude: "; font-weight: 600; color: var(--accent); }
+  .ask-form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .ask-form input {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 0.85rem;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .ask-form button {
+    background: var(--accent);
+    color: var(--paper-raised);
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .ask-form button:disabled { opacity: 0.5; cursor: default; }
+  .ask-hint { font-size: 0.72rem; color: var(--muted); padding: 0 14px 10px; }
+
+  footer { margin: 48px 0 32px; font-size: 0.78rem; color: var(--muted); text-align: center; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="row">
+      <h1>Halal Screen</h1>
+      <div class="meta">Generated <span id="generated-at"></span></div>
+    </div>
+    <div id="example-banner" class="banner" hidden>
+      <strong>EXAMPLE DATA</strong>
+      <span>This is a sample report, not your real Trading212 ISA — generated to show the dashboard's shape before credentials are configured.</span>
+    </div>
+    <details class="disclaimer" open>
+      <summary>Disclaimer</summary>
+      <p>This report is produced by a best-effort automated tool. It is not financial advice and there is no guarantee of any investment return, past, present, or future. The halal/Shariah compliance screen is an automated heuristic — sector keyword matching plus AAOIFI-style financial ratio thresholds computed from available data — and is <strong>not a scholarly ruling</strong>. It is provided so you can see the underlying numbers and apply your own or a qualified scholar's judgment, not as a substitute for one.</p>
+    </details>
+    <div class="coverage" id="coverage"></div>
+  </header>
+
+  <section>
+    <h2>Your ISA Holdings</h2>
+    <div class="sub">Every currently held position, screened the same way as a new candidate.</div>
+    <div class="cards" id="holdings-cards"></div>
+  </section>
+
+  <section>
+    <h2>New Candidates</h2>
+    <div class="sub">Drawn from this run's shortlist — both groups always shown, never filtered down to only the buy-worthy ones.</div>
+    <div class="controls" id="filter-controls"></div>
+    <div class="columns">
+      <div>
+        <div class="col-head good">✓ Halal-Compliant</div>
+        <div class="cards" id="compliant-cards"></div>
+      </div>
+      <div>
+        <div class="col-head bad">⚑ Non-Compliant / Flagged</div>
+        <div class="cards" id="flagged-cards"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>stock-advisor · Phase 1 · read-only, advisory-only, no order ever placed</footer>
+</div>
+
+<button class="ask-btn" id="ask-toggle" type="button">💬 Ask about this report</button>
+<div class="ask-panel" id="ask-panel" hidden>
+  <div class="ask-head">
+    <span>Ask about this report</span>
+    <button id="ask-close" type="button" aria-label="Close">✕</button>
+  </div>
+  <div class="ask-log" id="ask-log"></div>
+  <form class="ask-form" id="ask-form">
+    <input id="ask-input" type="text" placeholder="e.g. Why is JPM flagged?" autocomplete="off">
+    <button type="submit" id="ask-send">Ask</button>
+  </form>
+  <div class="ask-hint">Answers from the data already in this report — not live research, and never a reason to place a trade.</div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------
+// REPORT DATA
+// Replace this object wholesale with the real run's data each time this
+// page is regenerated (see SKILL.md's dashboard-delivery instructions).
+// Shape mirrors ScanOutput / PortfolioReviewOutput / CandidateResult from
+// stock_advisor.reporting.schema as closely as the report actually needs.
+// ---------------------------------------------------------------------
+const REPORT_DATA = {
+  isExample: true,
+  generatedAt: "2026-11-05T08:00:00Z",
+  coverage: { universeSize: 618, shortlisted: 20, unmatched: 14, noMarketData: 3, failed: 2 },
+  holdings: [
+    {
+      ticker: "AAPL", brokerTicker: "AAPL_US_EQ", name: "Apple Inc.",
+      style: "growth", horizon: "1yr+",
+      technical: { verdict: "bullish", sma50: 231.4, sma200: 210.8, rsi14: 58.2, macdLine: 2.1, macdSignal: 1.4, volumeTrend: "rising" },
+      halal: { status: "compliant", ratios: { debt: 0.08, cash: 0.11, receivables: 0.14, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "add_more", allowed: ["hold", "trim", "add_more", "avoid"],
+      rationale: "Services revenue keeps compounding faster than hardware, and the installed base gives pricing power most peers lack. Momentum is intact without looking stretched."
+    },
+    {
+      ticker: "JPM", brokerTicker: "JPM_US_EQ", name: "JPMorgan Chase & Co.",
+      style: "value", horizon: "1yr+",
+      technical: { verdict: "bearish", sma50: 198.1, sma200: 205.6, rsi14: 41.0, macdLine: -1.3, macdSignal: -0.4, volumeTrend: "falling" },
+      halal: { status: "non_compliant", failedChecks: ["sector: conventional banking"], ratios: { debt: null, cash: null, receivables: null, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "trim", allowed: ["hold", "trim", "avoid"],
+      rationale: "Conventional banking fails the sector screen outright, regardless of financial performance — the ratios were never computed because the sector check short-circuits first."
+    },
+    {
+      ticker: "ULVR.L", brokerTicker: "ULVR_EQ", name: "Unilever PLC",
+      style: "dividend", horizon: "1yr+",
+      technical: { verdict: "neutral", sma50: 46.2, sma200: 45.8, rsi14: 52.0, macdLine: 0.1, macdSignal: 0.2, volumeTrend: "flat" },
+      halal: { status: "compliant", ratios: { debt: 0.21, cash: 0.09, receivables: 0.17, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "hold", allowed: ["hold", "trim", "add_more", "avoid"],
+      rationale: "Steady, low-growth consumer staples exposure with a dependable dividend. Nothing here argues for a change in either direction right now."
+    },
+    {
+      ticker: "VWRL.L", brokerTicker: "VWRL_EQ", name: "Vanguard FTSE All-World UCITS ETF",
+      reason: "pooled_fund_excluded"
+    }
+  ],
+  candidatesCompliant: [
+    { ticker: "NVDA", name: "NVIDIA Corporation", style: "growth", horizon: "1yr+",
+      technical: { verdict: "bullish", sma50: 148.2, sma200: 121.9, rsi14: 64.1, macdLine: 3.4, macdSignal: 2.1, volumeTrend: "rising" },
+      halal: { status: "compliant", ratios: { debt: 0.05, cash: 0.18, receivables: 0.22, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "add_more", allowed: ["hold", "trim", "add_more", "avoid"],
+      rationale: "Data-centre demand shows no sign of cooling and the latest guidance beat consensus again. Richly valued, but the growth rate still supports it on a 1yr+ view." },
+    { ticker: "ADBE", name: "Adobe Inc.", style: "growth", horizon: "6-12mo",
+      technical: { verdict: "bullish", sma50: 412.0, sma200: 398.5, rsi14: 55.3, macdLine: 1.1, macdSignal: 0.6, volumeTrend: "rising" },
+      halal: { status: "compliant", ratios: { debt: 0.14, cash: 0.16, receivables: 0.19, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "add_more", allowed: ["hold", "trim", "add_more", "avoid"],
+      rationale: "Creative Cloud pricing changes are sticking better than expected, and the AI features are showing up in retention numbers, not just the earnings-call script." },
+    { ticker: "CRM", name: "Salesforce, Inc.", style: "value", horizon: "1yr+",
+      technical: { verdict: "neutral", sma50: 256.0, sma200: 258.3, rsi14: 48.7, macdLine: -0.2, macdSignal: -0.1, volumeTrend: "flat" },
+      halal: { status: "compliant", ratios: { debt: 0.19, cash: 0.08, receivables: 0.24, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "hold", allowed: ["hold", "trim", "add_more", "avoid"],
+      rationale: "Margins keep improving post-restructuring but top-line growth has slowed to the high single digits — fine as a holding, not an obvious add right now." }
+  ],
+  candidatesFlagged: [
+    { ticker: "GS", name: "The Goldman Sachs Group, Inc.", style: "value", horizon: "1yr+",
+      technical: { verdict: "bullish", sma50: 612.0, sma200: 571.4, rsi14: 61.0, macdLine: 4.2, macdSignal: 2.8, volumeTrend: "rising" },
+      halal: { status: "non_compliant", failedChecks: ["sector: investment bank"], ratios: { debt: null, cash: null, receivables: null, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "avoid", allowed: ["hold", "trim", "avoid"],
+      rationale: "Strong technical picture, but an investment bank fails the sector screen outright — the financial ratios are irrelevant once that check fires." },
+    { ticker: "SNOW", name: "Snowflake Inc.", style: "growth", horizon: "6-12mo",
+      technical: { verdict: "bullish", sma50: 178.4, sma200: 162.0, rsi14: 59.8, macdLine: 2.0, macdSignal: 1.2, volumeTrend: "rising" },
+      halal: { status: "insufficient_data", missingFields: ["debt_to_market_cap", "receivables_and_cash_to_market_cap"], ratios: { debt: null, cash: 0.31, receivables: null, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio.", "Two further ratios (debt-to-market-cap, receivables-and-cash) could not be computed — free data coverage for this ticker is incomplete."] },
+      recommendation: "hold", allowed: ["hold", "trim", "avoid"],
+      rationale: "Technically strong, but the halal screen can't currently reach a verdict — two of the four ratios have no data for this ticker from the free source in use." },
+    { ticker: "MGM", name: "MGM Resorts International", style: "value", horizon: "1yr+",
+      technical: { verdict: "neutral", sma50: 34.1, sma200: 35.0, rsi14: 46.2, macdLine: -0.1, macdSignal: 0.0, volumeTrend: "flat" },
+      halal: { status: "non_compliant", failedChecks: ["sector: casino"], ratios: { debt: null, cash: null, receivables: null, income: null },
+        caveats: ["Non-permissible income (e.g. interest income) was not checked — no reliable free data source exists for this ratio."] },
+      recommendation: "avoid", allowed: ["hold", "trim", "avoid"],
+      rationale: "Casino and gaming operations fail the sector screen directly — not a judgment on the business, just outside what this screen can pass." }
+  ]
+};
+
+const REASON_LABELS = {
+  unmatched_instrument: "No tradable broker instrument matched this ticker — nothing to screen.",
+  no_market_data: "The market-data provider has no entry for this ticker (a coverage gap).",
+  market_data_error: "The data fetch failed (rate limit, connection error) — this is “we couldn’t look,” not a verdict.",
+  pooled_fund_excluded: "This is an ETF or other pooled fund — excluded from candidacy by design, regardless of halal status."
+};
+
+function fmtPct(v) { return v == null ? null : (v * 100).toFixed(1) + "%"; }
+function statPill(status) {
+  if (status === "compliant") return '<span class="pill good">Compliant</span>';
+  if (status === "non_compliant") return '<span class="pill bad">Non-compliant</span>';
+  if (status === "insufficient_data") return '<span class="pill muted">Insufficient data</span>';
+  return '<span class="pill muted">Unknown</span>';
+}
+function verdictPill(v) {
+  if (v === "bullish") return '<span class="pill good">Bullish</span>';
+  if (v === "bearish") return '<span class="pill bad">Bearish</span>';
+  return '<span class="pill outline">Neutral</span>';
+}
+function stat(label, val) {
+  const shown = (val === null || val === undefined) ? '<span class="val na">not available</span>' : `<span class="val">${val}</span>`;
+  return `<div class="stat"><span class="lbl">${label}</span>${shown}</div>`;
+}
+
+function entryCard(e, kind) {
+  if (e.reason) {
+    return `
+      <details class="card">
+        <summary class="card-head">
+          <div class="id"><div class="tkr">${e.ticker}</div><div class="name">${e.name}</div></div>
+          <div class="chips"><span class="pill outline">excluded</span></div>
+          <span class="caret">▸</span>
+        </summary>
+        <div class="card-body"><p class="unavail">${REASON_LABELS[e.reason] || e.reason}</p></div>
+      </details>`;
+  }
+  const h = e.halal, t = e.technical;
+  return `
+    <details class="card" data-style="${e.style}" data-horizon="${e.horizon}" data-status="${h.status}">
+      <summary class="card-head">
+        <div class="id"><div class="tkr">${e.ticker}</div><div class="name">${e.name}</div></div>
+        <div class="chips">${verdictPill(t.verdict)}${statPill(h.status)}</div>
+        <span class="caret">▸</span>
+      </summary>
+      <div class="card-body">
+        <div class="chips" style="margin:10px 0 0">
+          <span class="pill outline">${e.style}</span>
+          <span class="pill outline">${e.horizon}</span>
+        </div>
+        <div class="grid figs">
+          ${stat("50d / 200d avg", t.sma50 != null && t.sma200 != null ? `${t.sma50} / ${t.sma200}` : null)}
+          ${stat("RSI (14d)", t.rsi14)}
+          ${stat("MACD line / signal", t.macdLine != null ? `${t.macdLine} / ${t.macdSignal}` : null)}
+          ${stat("Volume trend", t.volumeTrend)}
+          ${stat("Debt / market cap", fmtPct(h.ratios.debt))}
+          ${stat("Cash+interest / market cap", fmtPct(h.ratios.cash))}
+          ${stat("Receivables+cash / market cap", fmtPct(h.ratios.receivables))}
+          ${stat("Non-permissible income", fmtPct(h.ratios.income))}
+        </div>
+        ${h.failedChecks && h.failedChecks.length ? `<p class="rationale"><strong>Failed:</strong> ${h.failedChecks.join(", ")}</p>` : ""}
+        <p class="rationale">${e.rationale}</p>
+        ${(h.caveats || []).map(c => `<div class="caveat">${c}</div>`).join("")}
+        <div class="reco-row">
+          <span class="reco ${e.recommendation}">${e.recommendation.replace("_", " ")}</span>
+          <span style="color:var(--ink-soft)">of ${e.allowed.join(" / ")}</span>
+        </div>
+      </div>
+    </details>`;
+}
+
+function render() {
+  const d = REPORT_DATA;
+  document.getElementById("generated-at").textContent = new Date(d.generatedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  document.getElementById("example-banner").hidden = !d.isExample;
+  document.getElementById("coverage").innerHTML = `
+    <span>Universe scanned: <b>${d.coverage.universeSize}</b></span>
+    <span>Shortlisted: <b>${d.coverage.shortlisted}</b></span>
+    <span>Unmatched: <b>${d.coverage.unmatched}</b></span>
+    <span>No market data: <b>${d.coverage.noMarketData}</b></span>
+    <span>Fetch failed: <b>${d.coverage.failed}</b></span>`;
+
+  document.getElementById("holdings-cards").innerHTML = d.holdings.map(h => entryCard(h, "holding")).join("");
+  document.getElementById("compliant-cards").innerHTML = d.candidatesCompliant.map(c => entryCard(c, "compliant")).join("") || '<p class="unavail">No compliant candidates in this run’s shortlist.</p>';
+  document.getElementById("flagged-cards").innerHTML = d.candidatesFlagged.map(c => entryCard(c, "flagged")).join("") || '<p class="unavail">No flagged candidates in this run’s shortlist.</p>';
+
+  const styles = ["growth", "dividend", "value", "sector-bet"];
+  const controls = document.getElementById("filter-controls");
+  controls.innerHTML = ['<button class="chip-toggle" data-filter="all" aria-pressed="true">All styles</button>']
+    .concat(styles.map(s => `<button class="chip-toggle" data-filter="${s}" aria-pressed="false">${s}</button>`)).join("");
+  controls.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".chip-toggle");
+    if (!btn) return;
+    controls.querySelectorAll(".chip-toggle").forEach(b => b.setAttribute("aria-pressed", "false"));
+    btn.setAttribute("aria-pressed", "true");
+    const f = btn.dataset.filter;
+    document.querySelectorAll("#compliant-cards .card, #flagged-cards .card").forEach(card => {
+      card.hidden = !(f === "all" || card.dataset.style === f);
+    });
+  });
+}
+render();
+
+// --- Ask-about-this-report panel (sample capability) ---
+(function () {
+  const toggle = document.getElementById("ask-toggle");
+  const panel = document.getElementById("ask-panel");
+  const closeBtn = document.getElementById("ask-close");
+  const form = document.getElementById("ask-form");
+  const input = document.getElementById("ask-input");
+  const send = document.getElementById("ask-send");
+  const log = document.getElementById("ask-log");
+
+  function addMsg(role, text) {
+    const div = document.createElement("div");
+    div.className = "ask-msg " + role;
+    div.textContent = text;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  toggle.addEventListener("click", () => { panel.hidden = false; toggle.hidden = true; input.focus(); });
+  closeBtn.addEventListener("click", () => { panel.hidden = true; toggle.hidden = false; });
+
+  let sample = null;
+  (async () => {
+    try {
+      sample = await window.claude?.use?.("sample");
+    } catch (e) {
+      sample = null;
+    }
+    if (!sample) {
+      addMsg("claude", "This report's live Q&A isn't available in this viewer right now. Reopen it from Claude, or ask your question there instead.");
+      input.disabled = true;
+      send.disabled = true;
+    }
+  })();
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const q = input.value.trim();
+    if (!q || !sample) return;
+    addMsg("you", q);
+    input.value = "";
+    send.disabled = true;
+    const thinking = document.createElement("div");
+    thinking.className = "ask-msg claude";
+    thinking.textContent = "Thinking...";
+    log.appendChild(thinking);
+    log.scrollTop = log.scrollHeight;
+
+    const context = JSON.stringify(REPORT_DATA);
+    const prompt = `You are answering a question about a stock-advisor report the viewer is currently looking at. ` +
+      `Ground every answer ONLY in the JSON data below -- do not invent prices, news, or data not present in it, ` +
+      `and do not suggest placing a trade (this tool is read-only/advisory, and any trade decision is the viewer's ` +
+      `own, made manually in their broker's app). If the data needed to answer isn't in this JSON, say so plainly ` +
+      `rather than guessing. Keep the answer to a few sentences.\n\nReport JSON:\n${context}\n\nQuestion: ${q}`;
+
+    try {
+      const res = await sample(prompt, {
+        onText: ({ text }) => { thinking.textContent = text; log.scrollTop = log.scrollHeight; }
+      });
+      thinking.textContent = res.text;
+    } catch (err) {
+      const code = err && err.code;
+      if (code === "not_granted") {
+        thinking.textContent = "Q&A isn't permitted for this viewer.";
+      } else if (code === "rate_limited") {
+        thinking.textContent = "Rate limited -- try again in a moment.";
+      } else {
+        thinking.textContent = "Couldn't get an answer just now -- try again.";
+      }
+    } finally {
+      send.disabled = false;
+      log.scrollTop = log.scrollHeight;
+    }
+  });
+})();
+</script>
