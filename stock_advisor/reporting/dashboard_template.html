@@ -453,6 +453,27 @@ const REASON_LABELS = {
   pooled_fund_excluded: "This is an ETF or other pooled fund — excluded from candidacy by design, regardless of halal status."
 };
 
+// Every interpolated value below may ultimately trace back to web-research
+// text Claude wrote after reading arbitrary public content about a ticker
+// (the rationale, in particular) -- never trust it by construction, even
+// though it's "our own" data by the time it reaches this template. `esc`
+// HTML-escapes free text before it goes into innerHTML; `oneOf` constrains
+// an enum-shaped field (style, horizon, recommendation, status) to a known
+// allowlist before it lands in a class or data attribute, falling back to
+// a safe default rather than ever passing an unrecognized value through.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
+function oneOf(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+const STYLES = ["growth", "dividend", "value", "sector-bet"];
+const HORIZONS = ["6-12mo", "1yr+"];
+const STATUSES = ["compliant", "non_compliant", "insufficient_data"];
+const RECOMMENDATIONS = ["hold", "trim", "add_more", "avoid"];
+
 function fmtPct(v) { return v == null ? null : (v * 100).toFixed(1) + "%"; }
 function statPill(status) {
   if (status === "compliant") return '<span class="pill good">Compliant</span>';
@@ -466,34 +487,39 @@ function verdictPill(v) {
   return '<span class="pill outline">Neutral</span>';
 }
 function stat(label, val) {
-  const shown = (val === null || val === undefined) ? '<span class="val na">not available</span>' : `<span class="val">${val}</span>`;
-  return `<div class="stat"><span class="lbl">${label}</span>${shown}</div>`;
+  const shown = (val === null || val === undefined) ? '<span class="val na">not available</span>' : `<span class="val">${esc(val)}</span>`;
+  return `<div class="stat"><span class="lbl">${esc(label)}</span>${shown}</div>`;
 }
 
 function entryCard(e, kind) {
   if (e.reason) {
+    const label = REASON_LABELS[e.reason] || esc(e.reason);
     return `
       <details class="card">
         <summary class="card-head">
-          <div class="id"><div class="tkr">${e.ticker}</div><div class="name">${e.name}</div></div>
+          <div class="id"><div class="tkr">${esc(e.ticker)}</div><div class="name">${esc(e.name)}</div></div>
           <div class="chips"><span class="pill outline">excluded</span></div>
           <span class="caret">▸</span>
         </summary>
-        <div class="card-body"><p class="unavail">${REASON_LABELS[e.reason] || e.reason}</p></div>
+        <div class="card-body"><p class="unavail">${label}</p></div>
       </details>`;
   }
   const h = e.halal, t = e.technical;
+  const style = oneOf(e.style, STYLES, "other");
+  const horizon = oneOf(e.horizon, HORIZONS, "other");
+  const status = oneOf(h.status, STATUSES, "insufficient_data");
+  const recommendation = oneOf(e.recommendation, RECOMMENDATIONS, "hold");
   return `
-    <details class="card" data-style="${e.style}" data-horizon="${e.horizon}" data-status="${h.status}">
+    <details class="card" data-style="${style}" data-horizon="${horizon}" data-status="${status}">
       <summary class="card-head">
-        <div class="id"><div class="tkr">${e.ticker}</div><div class="name">${e.name}</div></div>
+        <div class="id"><div class="tkr">${esc(e.ticker)}</div><div class="name">${esc(e.name)}</div></div>
         <div class="chips">${verdictPill(t.verdict)}${statPill(h.status)}</div>
         <span class="caret">▸</span>
       </summary>
       <div class="card-body">
         <div class="chips" style="margin:10px 0 0">
-          <span class="pill outline">${e.style}</span>
-          <span class="pill outline">${e.horizon}</span>
+          <span class="pill outline">${esc(style)}</span>
+          <span class="pill outline">${esc(horizon)}</span>
         </div>
         <div class="grid figs">
           ${stat("50d / 200d avg", t.sma50 != null && t.sma200 != null ? `${t.sma50} / ${t.sma200}` : null)}
@@ -505,12 +531,12 @@ function entryCard(e, kind) {
           ${stat("Receivables+cash / market cap", fmtPct(h.ratios.receivables))}
           ${stat("Non-permissible income", fmtPct(h.ratios.income))}
         </div>
-        ${h.failedChecks && h.failedChecks.length ? `<p class="rationale"><strong>Failed:</strong> ${h.failedChecks.join(", ")}</p>` : ""}
-        <p class="rationale">${e.rationale}</p>
-        ${(h.caveats || []).map(c => `<div class="caveat">${c}</div>`).join("")}
+        ${h.failedChecks && h.failedChecks.length ? `<p class="rationale"><strong>Failed:</strong> ${esc(h.failedChecks.join(", "))}</p>` : ""}
+        <p class="rationale">${esc(e.rationale)}</p>
+        ${(h.caveats || []).map(c => `<div class="caveat">${esc(c)}</div>`).join("")}
         <div class="reco-row">
-          <span class="reco ${e.recommendation}">${e.recommendation.replace("_", " ")}</span>
-          <span style="color:var(--ink-soft)">of ${e.allowed.join(" / ")}</span>
+          <span class="reco ${recommendation}">${esc(recommendation.replace("_", " "))}</span>
+          <span style="color:var(--ink-soft)">of ${esc(e.allowed.join(" / "))}</span>
         </div>
       </div>
     </details>`;
@@ -520,12 +546,13 @@ function render() {
   const d = REPORT_DATA;
   document.getElementById("generated-at").textContent = new Date(d.generatedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   document.getElementById("example-banner").hidden = !d.isExample;
+  const cov = d.coverage;
   document.getElementById("coverage").innerHTML = `
-    <span>Universe scanned: <b>${d.coverage.universeSize}</b></span>
-    <span>Shortlisted: <b>${d.coverage.shortlisted}</b></span>
-    <span>Unmatched: <b>${d.coverage.unmatched}</b></span>
-    <span>No market data: <b>${d.coverage.noMarketData}</b></span>
-    <span>Fetch failed: <b>${d.coverage.failed}</b></span>`;
+    <span>Universe scanned: <b>${Number(cov.universeSize) || 0}</b></span>
+    <span>Shortlisted: <b>${Number(cov.shortlisted) || 0}</b></span>
+    <span>Unmatched: <b>${Number(cov.unmatched) || 0}</b></span>
+    <span>No market data: <b>${Number(cov.noMarketData) || 0}</b></span>
+    <span>Fetch failed: <b>${Number(cov.failed) || 0}</b></span>`;
 
   document.getElementById("holdings-cards").innerHTML = d.holdings.map(h => entryCard(h, "holding")).join("");
   document.getElementById("compliant-cards").innerHTML = d.candidatesCompliant.map(c => entryCard(c, "compliant")).join("") || '<p class="unavail">No compliant candidates in this run’s shortlist.</p>';
